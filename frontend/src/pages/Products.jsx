@@ -29,6 +29,7 @@ const EMPTY_FORM = {
   unitOfMeasure: 'Units',
   basePrice: '',
   taxRate: '18',
+  hsnCode: '',
   isActive: true,
 };
 
@@ -49,6 +50,7 @@ function ProductModal({ open, onClose, onSubmit, initial, isSaving }) {
           unitOfMeasure: initial.unitOfMeasure || 'Units',
           basePrice:     initial.basePrice != null ? String(initial.basePrice) : '',
           taxRate:       initial.taxRate != null ? String(initial.taxRate) : '18',
+          hsnCode:       initial.hsnCode || '',
           isActive:      initial.isActive !== false,
         });
       } else {
@@ -130,6 +132,15 @@ function ProductModal({ open, onClose, onSubmit, initial, isSaving }) {
               />
             </div>
             <div>
+              <label className="text-xs font-semibold text-gray-600 block mb-1">HSN / SAC</label>
+              <input
+                value={form.hsnCode}
+                onChange={e => setForm({ ...form, hsnCode: e.target.value })}
+                placeholder="e.g. 8541"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              />
+            </div>
+            <div className="col-span-2">
               <label className="text-xs font-semibold text-gray-600 block mb-1">Category</label>
               <input
                 value={form.category}
@@ -228,9 +239,14 @@ function ProductCard({ product, onEdit, onDelete, onToggle }) {
             </div>
             <div className="min-w-0">
               <h3 className="font-bold text-gray-900 text-sm leading-tight truncate">{product.name}</h3>
-              {product.sku && (
-                <span className="text-[10px] text-gray-400 font-mono">{product.sku}</span>
-              )}
+              <div className="flex gap-2">
+                {product.sku && (
+                  <span className="text-[10px] text-gray-400 font-mono">SKU: {product.sku}</span>
+                )}
+                {product.hsnCode && (
+                  <span className="text-[10px] text-emerald-600 font-mono">HSN: {product.hsnCode}</span>
+                )}
+              </div>
             </div>
           </div>
           {!product.isActive && (

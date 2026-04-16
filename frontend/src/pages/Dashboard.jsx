@@ -6,7 +6,7 @@ import { useDashboardStore } from '../stores/dashboardStore';
 import { useSocket } from '../hooks/useSocket';
 import {
   Users, ShoppingCart, CheckSquare, TrendingUp,
-  UserCheck, AlertTriangle, Activity, BarChart2, Download
+  UserCheck, AlertTriangle, Activity, BarChart2, Download, Package
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
@@ -102,11 +102,14 @@ const Dashboard = () => {
         <KPICard label={user?.role === 'EMPLOYEE' ? 'My Lost Leads' : 'Lost Leads'} value={isLoading ? '…' : L.lostLeads ?? 0} sub={isLoading ? null : fmtMoney(L.lostLeadValue)} icon={AlertTriangle} color="bg-red-400" />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        <KPICard label={user?.role === 'EMPLOYEE' ? 'My Sales' : 'Total Sales'} value={isLoading ? '…' : fmtMoney(S.revenue)} sub={isLoading ? null : `${S.count ?? 0} orders`} icon={ShoppingCart} color="bg-violet-500" onClick={() => navigate('/sales')} />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <KPICard label={user?.role === 'EMPLOYEE' ? 'My Sales' : 'Total Revenue'} value={isLoading ? '…' : fmtMoney(S.revenue)} sub={isLoading ? null : `${S.count ?? 0} orders`} icon={ShoppingCart} color="bg-violet-500" onClick={() => navigate('/sales')} />
         <KPICard label={user?.role === 'EMPLOYEE' ? 'My Tasks' : 'Pending Tasks'} value={isLoading ? '…' : T.pending ?? 0} icon={CheckSquare} color="bg-amber-500" onClick={() => navigate('/tasks')} />
         {user?.role === 'ADMIN' && (
-          <KPICard label="System Status" value="Live" sub="All services connected" icon={TrendingUp} color="bg-teal-500" />
+          <>
+            <KPICard label="Inventory Value" value={isLoading ? '…' : fmtMoney(metrics.inventory?.totalValue)} sub={`${metrics.inventory?.totalMaterials ?? 0} items`} icon={Package} color="bg-indigo-500" onClick={() => navigate('/inventory')} />
+            <KPICard label="Low Stock" value={isLoading ? '…' : metrics.inventory?.lowStockCount ?? 0} sub="Requires attention" icon={AlertTriangle} color="bg-rose-500" onClick={() => navigate('/inventory')} />
+          </>
         )}
       </div>
 

@@ -122,6 +122,29 @@ exports.getDashboardMetrics = async (req, res) => {
       if (bin) bin.Leads += 1;
     });
 
+    // Get inventory metrics
+    const [totalMaterials, stockValueResult] = await Promise.all([
+      prisma.material.count(),
+      prisma.material.aggregate({
+        _sum: {
+          balance: true,
+          totalValue: true
+        }
+      })
+    ]);
+
+    // Precise low stock check (balance <= minQuantity)
+    const allMaterials = await prisma.material.findMany({
+      select: { balance: true, minQuantity: true, rate: true }
+    });
+    
+    let preciseLowStockCount = 0;
+    let totalStockValue = 0;
+    allMaterials.forEach(m => {
+      if (Number(m.balance) <= Number(m.minQuantity)) preciseLowStockCount++;
+      totalStockValue += Number(m.balance) * Number(m.rate);
+    });
+
     res.json({
       success: true,
       data: {
@@ -132,6 +155,11 @@ exports.getDashboardMetrics = async (req, res) => {
         },
         tasks: {
           pending: pendingTasks
+        },
+        inventory: {
+          totalMaterials,
+          lowStockCount: preciseLowStockCount,
+          totalValue: totalStockValue
         },
         chartData
       }

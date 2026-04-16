@@ -10,6 +10,7 @@ exports.getProducts = async (req, res) => {
       where.OR = [
         { name: { contains: search } },
         { sku: { contains: search } },
+        { hsnCode: { contains: search } },
         { description: { contains: search } }
       ];
     }
@@ -50,6 +51,7 @@ exports.createProduct = async (req, res) => {
       name,
       description,
       sku,
+      hsnCode,
       category,
       unitOfMeasure,
       basePrice,
@@ -61,6 +63,7 @@ exports.createProduct = async (req, res) => {
         name,
         description,
         sku,
+        hsnCode,
         category,
         unitOfMeasure: unitOfMeasure || 'Units',
         basePrice: parseFloat(basePrice),

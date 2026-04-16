@@ -33,6 +33,8 @@ const userRoutes = require('./routes/user.routes');
 const leadRoutes = require('./routes/lead.routes');
 const settingRoutes = require('./routes/setting.routes');
 
+const materialRoutes = require('./routes/material.routes');
+
 // Initialize express
 const app = express();
 const httpServer = createServer(app);
@@ -63,7 +65,10 @@ app.use(cookieParser());
 app.use('/uploads', express.static('uploads'));
 
 
+// Register routes (Move dashboard up so it doesn't fall through)
+app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/materials', materialRoutes);
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/vendors', vendorRoutes);
@@ -133,7 +138,7 @@ app.use((err, req, res, next) => {
     message: err.message || 'Internal Server Error' 
   });
 });
-app.use('/api/dashboard', dashboardRoutes);
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' });
@@ -144,6 +149,15 @@ const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 Socket.IO ready for real-time connections`);
+});
+
+httpServer.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use. Please close the other process and restart.`);
+    process.exit(1);
+  } else {
+    throw err;
+  }
 });
 
 module.exports = { app, io };

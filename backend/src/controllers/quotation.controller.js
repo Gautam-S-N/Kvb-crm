@@ -213,124 +213,178 @@ exports.generatePDF = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
     
-    // Generate HTML for PDF
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>Quotation ${quotation.quotationNumber}</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 40px; color: #333; }
-          .header { text-align: center; border-bottom: 3px solid #16a34a; padding-bottom: 20px; margin-bottom: 30px; }
-          .company-name { font-size: 28px; font-weight: bold; color: #16a34a; }
-          .doc-title { font-size: 24px; margin-top: 10px; }
-          .info-section { margin-bottom: 20px; }
-          .info-row { display: flex; justify-content: space-between; margin-bottom: 10px; }
-          .label { font-weight: bold; color: #666; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th { background-color: #16a34a; color: white; padding: 12px; text-align: left; }
-          td { padding: 12px; border-bottom: 1px solid #ddd; }
-          .total-section { margin-top: 30px; text-align: right; }
-      .total-row { margin-bottom: 5px; }
-          .grand-total { font-size: 20px; font-weight: bold; color: #16a34a; margin-top: 10px; }
-          .terms { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; }
-          .signature { margin-top: 60px; text-align: right; }
-        </style>
-      </head>
-      <body>
-        <div class="header">
-          <div class="company-name">KVB Green Energies</div>
-          <div>Your trusted partner in renewable energy solutions</div>
-          <div class="doc-title">QUOTATION</div>
+    // Generate HTML for PDF (matches professional Invoice.docx format)
+    const taxableAmount = Number(quotation.subTotal) - Number(quotation.discountAmount);
+    const cgst = Number(quotation.taxAmount) / 2;
+    const sgst = Number(quotation.taxAmount) / 2;
+
+    const itemsRows = quotation.items.map((item, i) => {
+      const itemTaxable = Number(item.totalPrice);
+      return `
+        <tr>
+          <td style="text-align:center;border:1px solid #999;padding:6px 4px;">${i + 1}</td>
+          <td style="border:1px solid #999;padding:6px 4px;">
+            <strong>${item.product.name}</strong>
+            ${(item.description || item.product.description) ? `<br/><small style="color:#555">${item.description || item.product.description}</small>` : ''}
+          </td>
+          <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${item.product.hsnCode || ''}</td>
+          <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${Number(item.quantity)} ${item.product.unitOfMeasure}</td>
+          <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${Number(item.unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+          <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${item.product.unitOfMeasure}</td>
+          <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${itemTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+        </tr>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Quotation ${quotation.quotationNumber}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 12px; color: #111; padding: 24px 32px; }
+    .outer-border { border: 2px solid #333; }
+    .title-bar { text-align: center; font-size: 16px; font-weight: bold; border-bottom: 2px solid #333; padding: 6px 0; letter-spacing: 1px; }
+    .top-grid { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #777; }
+    .company-block { padding: 10px 12px; border-right: 1px solid #777; }
+    .company-block .name { font-size: 15px; font-weight: bold; color: #15803d; }
+    .company-block p { margin-top: 3px; line-height: 1.5; }
+    .meta-block { padding: 0; }
+    .meta-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #aaa; }
+    .meta-row:last-child { border-bottom: none; }
+    .meta-cell { padding: 5px 8px; font-size: 11px; border-right: 1px solid #aaa; }
+    .meta-cell:last-child { border-right: none; }
+    .meta-label { font-weight: bold; color: #444; font-size: 10px; display: block; }
+    .meta-value { font-size: 11px; }
+    .buyer-dispatch-grid { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #777; }
+    .buyer-block { padding: 10px 12px; border-right: 1px solid #777; }
+    .buyer-block .label { font-size: 10px; font-weight: bold; color: #444; text-transform: uppercase; margin-bottom: 4px; }
+    .section-table { width: 100%; border-collapse: collapse; border-bottom: 1px solid #777; }
+    .section-table th { background: #d1fae5; color: #14532d; padding: 7px 6px; border: 1px solid #999; font-size: 11px; text-align: center; }
+    .section-table td { padding: 6px; border: 1px solid #999; vertical-align: top; font-size: 11px; }
+    .total-row td { font-weight: bold; background: #f0fdf4; }
+    .words-row { padding: 8px 12px; border-bottom: 1px solid #777; font-size: 11px; }
+    .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; min-height: 120px; }
+    .declaration-block { padding: 10px 12px; border-right: 1px solid #777; font-size: 10.5px; line-height: 1.6; }
+    .declaration-block .dec-title { font-weight: bold; margin-bottom: 4px; }
+    .bank-block { padding: 10px 12px; font-size: 10.5px; line-height: 1.7; }
+    .bank-block .bank-title { font-weight: bold; margin-bottom: 4px; }
+    .sig-row { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #777; }
+    .sig-cell { padding: 10px 12px; font-size: 11px; border-right: 1px solid #777; min-height: 70px; display: flex; align-items: flex-end; }
+    .sig-cell:last-child { border-right: none; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+<div class="outer-border">
+  <div class="title-bar">QUOTATION</div>
+  <div class="top-grid">
+    <div class="company-block">
+      <div class="name">KVB Green Energies</div>
+      <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad – 580011, Karnataka, India</p>
+      <p>Phone: +91 95455 29950, +91 74118 93555</p>
+      <p>GSTIN: 29AAGFK7890M1ZX</p>
+      <p>State: Karnataka</p>
+    </div>
+    <div class="meta-block">
+      <div class="meta-row">
+        <div class="meta-cell">
+          <span class="meta-label">Quotation No.</span>
+          <span class="meta-value">${quotation.quotationNumber}</span>
         </div>
-        
-        <div class="info-section">
-          <div class="info-row">
-            <div><span class="label">Quotation #:</span> ${quotation.quotationNumber}</div>
-            <div><span class="label">Date:</span> ${new Date(quotation.quotationDate).toLocaleDateString()}</div>
-          </div>
-          <div class="info-row">
-            <div><span class="label">Valid Until:</span> ${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString() : 'N/A'}</div>
-            <div><span class="label">Lead:</span> ${quotation.lead.leadNumber}</div>
-          </div>
+        <div class="meta-cell">
+          <span class="meta-label">Dated</span>
+          <span class="meta-value">${new Date(quotation.quotationDate).toLocaleDateString('en-IN')}</span>
         </div>
-        
-        <div class="info-section">
-          <div class="label">To:</div>
-          <div>${quotation.customer.contactName}</div>
-          ${quotation.customer.companyName ? `<div>${quotation.customer.companyName}</div>` : ''}
-          <div>${quotation.customer.phone}</div>
-          ${quotation.customer.email ? `<div>${quotation.customer.email}</div>` : ''}
+      </div>
+      <div class="meta-row">
+        <div class="meta-cell">
+          <span class="meta-label">Valid Until</span>
+          <span class="meta-value">${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString('en-IN') : '—'}</span>
         </div>
-        
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Product/Description</th>
-              <th>Qty</th>
-              <th>Unit Price</th>
-              <th>Discount</th>
-              <th>Tax</th>
-              <th>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${quotation.items.map((item, index) => `
-              <tr>
-                <td>${index + 1}</td>
-                <td>
-                  <strong>${item.product.name}</strong><br/>
-                  <small>${item.description || item.product.description || ''}</small>
-                </td>
-                <td>${item.quantity} ${item.product.unitOfMeasure}</td>
-                <td>₹${item.unitPrice.toLocaleString()}</td>
-                <td>${item.discount}%</td>
-                <td>${item.taxRate}%</td>
-                <td>₹${item.totalPrice.toLocaleString()}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-        
-        <div class="total-section">
-          <div class="total-row"><span class="label">Sub Total:</span> ₹${quotation.subTotal.toLocaleString()}</div>
-          ${quotation.discountAmount > 0 ? `<div class="total-row"><span class="label">Discount:</span> -₹${quotation.discountAmount.toLocaleString()}</div>` : ''}
-          <div class="total-row"><span class="label">Taxable Amount:</span> ₹${(quotation.subTotal - quotation.discountAmount).toLocaleString()}</div>
-          <div class="total-row"><span class="label">GST (18%):</span> ₹${quotation.taxAmount.toLocaleString()}</div>
-          <div class="grand-total">Grand Total: ₹${quotation.totalAmount.toLocaleString()}</div>
+        <div class="meta-cell">
+          <span class="meta-label">Lead Reference</span>
+          <span class="meta-value">${quotation.lead.leadNumber}</span>
         </div>
-        
-        ${quotation.paymentTerms ? `
-          <div class="terms">
-            <div class="label">Payment Terms:</div>
-            <div>${quotation.paymentTerms}</div>
-          </div>
-        ` : ''}
-        
-        ${quotation.deliveryTerms ? `
-          <div class="terms">
-            <div class="label">Delivery Terms:</div>
-            <div>${quotation.deliveryTerms}</div>
-          </div>
-        ` : ''}
-        
-        ${quotation.termsConditions ? `
-          <div class="terms">
-            <div class="label">Terms & Conditions:</div>
-            <div>${quotation.termsConditions}</div>
-          </div>
-        ` : ''}
-        
-        <div class="signature">
-          <div>Authorized Signatory</div>
-          <div style="margin-top: 10px;">${quotation.createdBy.firstName} ${quotation.createdBy.lastName}</div>
-          <div style="margin-top: 40px; border-top: 1px solid #333; width: 200px; display: inline-block;"></div>
-        </div>
-      </body>
-      </html>
-    `;
+      </div>
+    </div>
+  </div>
+
+  <div class="buyer-dispatch-grid">
+    <div class="buyer-block">
+      <div class="label">Customer (Bill to)</div>
+      <p><strong>${quotation.customer.contactName}</strong></p>
+      ${quotation.customer.companyName ? `<p>${quotation.customer.companyName}</p>` : ''}
+      <p>Ph: ${quotation.customer.phone}</p>
+      ${quotation.customer.email ? `<p>Email: ${quotation.customer.email}</p>` : ''}
+    </div>
+    <div class="buyer-block" style="border-right: none;">
+      <div class="label">Payment & Delivery Terms</div>
+      ${quotation.paymentTerms ? `<p><strong>Payment:</strong> ${quotation.paymentTerms}</p>` : ''}
+      ${quotation.deliveryTerms ? `<p><strong>Delivery:</strong> ${quotation.deliveryTerms}</p>` : ''}
+    </div>
+  </div>
+
+  <table class="section-table">
+    <thead>
+      <tr>
+        <th style="width:5%">Sl No.</th>
+        <th style="width:30%">Description of Goods</th>
+        <th style="width:10%">HSN/SAC</th>
+        <th style="width:12%">Quantity</th>
+        <th style="width:13%">Rate</th>
+        <th style="width:8%">Per</th>
+        <th style="width:12%">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itemsRows}
+      <tr class="total-row">
+        <td></td>
+        <td><strong>Total</strong></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td style="text-align:right;"><strong>₹${Number(quotation.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="words-row">
+    <strong>Total Quotation Value (in words):</strong>
+    &nbsp;Rupees <em>${quotation.totalAmount.toLocaleString('en-IN')} Only</em>
+  </div>
+
+  <div class="bottom-grid">
+    <div class="declaration-block">
+      <div class="dec-title">Terms & Conditions</div>
+      <p>${quotation.termsConditions || 'Standard terms apply.'}</p>
+      <br/>
+      <div class="dec-title">Declaration</div>
+      <p>We declare that this quotation shows the actual price of the goods described and that all particulars are true and correct.</p>
+    </div>
+    <div class="bank-block">
+      <div class="bank-title">Company's Bank Details</div>
+      <p>A/c Holder's Name: <strong>KVB Green Energies</strong></p>
+      <p>Bank Name: <strong>Bank of Baroda</strong></p>
+      <p>A/c No: <strong>89330500000481</strong></p>
+      <p>Branch: <strong>Ramnagar Branch, Dharwad</strong></p>
+      <p>IFS Code: <strong>BARBOVJDHMA</strong></p>
+    </div>
+  </div>
+
+  <div class="sig-row">
+    <div class="sig-cell">Accepted By (Name & Signature)</div>
+    <div class="sig-cell" style="flex-direction:column;align-items:flex-end;">
+      <p>for <strong>KVB Green Energies</strong></p>
+      <br/><br/><br/>
+      <p><strong>${quotation.createdBy.firstName} ${quotation.createdBy.lastName}</strong></p>
+      <p>Authorised Signatory</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>`;
     
     // Generate PDF with Puppeteer
     const browser = await puppeteer.launch({ headless: 'new' });

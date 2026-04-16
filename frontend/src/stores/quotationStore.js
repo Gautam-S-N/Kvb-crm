@@ -30,6 +30,15 @@ export const useQuotationStore = create((set, get) => ({
     }
   },
 
+  fetchQuotation: async (id) => {
+    try {
+      const res = await api.get(`/quotations/${id}`);
+      return { success: true, data: res.data.data || res.data };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.message };
+    }
+  },
+
   createQuotation: async (data) => {
     set({ isLoading: true, error: null });
     try {

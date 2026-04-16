@@ -23,6 +23,7 @@ import Settings     from './pages/Settings';
 import TodoList          from './pages/TodoList';
 import EmployeeTracking  from './pages/EmployeeTracking';
 import Quotations        from './pages/Quotations';
+import Inventory         from './pages/Inventory';
 
 // Auth guard helper
 const PrivateRoute = ({ element, roles }) => {
@@ -65,6 +66,7 @@ function App() {
         <Route path="/vendors"     element={<PrivateRoute element={<Vendors />} roles={['ADMIN']} />} />
         <Route path="/purchase"    element={<PrivateRoute element={<PurchaseOrders />} roles={['ADMIN']} />} />
         <Route path="/purchase/new" element={<PrivateRoute element={<CreatePurchaseOrder />} roles={['ADMIN']} />} />
+        <Route path="/inventory"   element={<PrivateRoute element={<Inventory />} roles={['ADMIN']} />} />
         <Route path="/tasks"       element={<PrivateRoute element={<Tasks />} />} />
         <Route path="/daily-reports" element={<PrivateRoute element={<DailyReports />} />} />
         <Route path="/targets"       element={<PrivateRoute element={<SalesTargets />} />} />

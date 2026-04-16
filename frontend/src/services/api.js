@@ -11,7 +11,14 @@ const api = axios.create({
 
 // Request interceptor to add auth token
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
+  // Read from Zustand persist storage (primary) or fallback to standalone key
+  let token = localStorage.getItem('token');
+  if (!token) {
+    try {
+      const authStorage = JSON.parse(localStorage.getItem('auth-storage') || '{}');
+      token = authStorage?.state?.token;
+    } catch (e) {}
+  }
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -23,9 +30,14 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      // Clear ALL auth keys to prevent stale state
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      localStorage.removeItem('auth-storage');
+      // Only redirect if not already on login page
+      if (!window.location.pathname.includes('/login')) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

@@ -154,6 +154,15 @@ exports.createPurchaseOrder = async (req, res) => {
 exports.updatePurchaseOrder = async (req, res) => {
   try {
     const { status, notes, receivedDate } = req.body;
+    
+    // Get PO with items before updating
+    const existingPO = await prisma.purchaseOrder.findUnique({
+      where: { id: req.params.id },
+      include: { items: true }
+    });
+    
+    if (!existingPO) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+
     const updated = await prisma.purchaseOrder.update({
       where: { id: req.params.id },
       data: {
@@ -162,6 +171,21 @@ exports.updatePurchaseOrder = async (req, res) => {
         ...(receivedDate && { receivedDate: new Date(receivedDate) })
       }
     });
+
+    // If status changed to RECEIVED, update material stock
+    if (status === 'RECEIVED' && existingPO.status !== 'RECEIVED') {
+      for (const item of existingPO.items) {
+        if (item.materialId) {
+          await prisma.material.update({
+            where: { id: item.materialId },
+            data: {
+              balance: { increment: item.quantity }
+            }
+          });
+        }
+      }
+    }
+
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

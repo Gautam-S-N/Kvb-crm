@@ -42,16 +42,8 @@ export default function Quotations() {
 
   const handleConvert = async (q) => {
     if (q.status === 'CONVERTED_TO_SALE') return;
-    if (!confirm(`Convert ${q.quotationNumber} to a Sale? A new sale record will be created.`)) return;
-    setConverting(q.id);
-    const res = await convertToSale(q.id);
-    setConverting(null);
-    if (res.success) {
-      // Navigate to the newly-created sale detail page
-      navigate(`/sales/${res.saleId}`);
-    } else {
-      alert(res.error || 'Conversion failed');
-    }
+    // Navigate to the editable Create Sale form, pre-populating with quotation data
+    navigate(`/sales/new?quotationId=${q.id}`);
   };
 
   const totalValue = quotations.reduce((s, q) => s + Number(q.totalAmount || 0), 0);

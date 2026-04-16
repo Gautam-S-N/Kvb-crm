@@ -355,6 +355,7 @@ model Product {
   name            String
   description     String?         @db.Text
   sku             String?         @unique
+  hsnCode         String?
   category        String?
   unitOfMeasure   String          @default("Units")
   basePrice       Decimal         @db.Decimal(15, 2)
@@ -417,8 +418,8 @@ model Quotation {
 
   items           QuotationItem[]
 
-  // One-to-one with Sale - only reference here, not in Sale
-  sale            Sale?
+  // One-to-many with Sale — a quotation can produce multiple invoices
+  sales           Sale[]
 
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
@@ -492,8 +493,8 @@ model Sale {
   items           SaleItem[]
   payments        Payment[]
 
-  // One-to-one with Quotation - the foreign key is here
-  quotationId     String?         @unique
+  // Many Sales can reference the same Quotation (one-to-many)
+  quotationId     String?
   quotation       Quotation?      @relation(fields: [quotationId], references: [id])
 
   createdAt       DateTime        @default(now())
@@ -604,6 +605,9 @@ model PurchaseOrderItem {
   id              String        @id @default(uuid())
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  materialId      String?
+  material        Material?     @relation(fields: [materialId], references: [id])
 
   itemName        String
   description     String?       @db.Text
@@ -793,6 +797,34 @@ model Notification {
 }
 
 // ============================================
+// INVENTORY MANAGEMENT
+// ============================================
+
+model Material {
+  id              String      @id @default(uuid())
+  itemName        String
+  itemCode        String?
+  category        String?
+  unit            String      @default("Nos")
+  inQty           Decimal     @default(0) @db.Decimal(15, 2)
+  outQty          Decimal     @default(0) @db.Decimal(15, 2)
+  balance         Decimal     @default(0) @db.Decimal(15, 2)
+  minQuantity     Decimal     @default(0) @db.Decimal(15, 2)
+  rate            Decimal     @default(0) @db.Decimal(15, 2)
+  totalValue      Decimal     @default(0) @db.Decimal(15, 2)
+  location        String?
+  projectSite     String?
+  remarks         String?     @db.Text
+  date            DateTime?   @default(now())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  purchaseItems   PurchaseOrderItem[]
+
+  @@map("materials")
+}
+
+// ============================================
 // SYSTEM SETTINGS & LOGS
 // ============================================
 
@@ -801,20 +833,21 @@ model Setting {
   key         String   @unique
   value       String   @db.Text
   description String?
+  category    String   @default("GENERAL")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@map("settings")
 }
 
 model ActivityLog {
   id          String   @id @default(uuid())
-  userId      String?
   action      String
   entityType  String
-  entityId    String?
-  oldData     Json?
-  newData     Json?
-  ipAddress   String?
-  userAgent   String?
+  entityId    String
+  description String?  @db.Text
+  metadata    Json?
+  performedBy String
   createdAt   DateTime @default(now())
 
   @@map("activity_logs")

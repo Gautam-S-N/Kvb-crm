@@ -34,6 +34,7 @@ const navItems = [
   { to: '/sales', icon: ShoppingCart, label: 'Sales', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/products', icon: Package, label: 'Products', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/purchase', icon: Truck, label: 'Purchase', roles: ['ADMIN'] },
+  { to: '/inventory', icon: Package, label: 'Inventory', roles: ['ADMIN'] },
   { to: '/tasks', icon: CheckSquare, label: 'Tasks', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/daily-reports', icon: BarChart2, label: 'Daily Reports', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/targets', icon: Target, label: 'Sales Targets', roles: ['ADMIN', 'EMPLOYEE'] },
