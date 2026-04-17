@@ -374,12 +374,6 @@ const buildInvoiceHTML = (sale) => {
     </tbody>
   </table>
 
-  <!-- Amount Chargeable in Words -->
-  <div class="words-row">
-    <strong>Amount Chargeable (in words):</strong>
-    &nbsp;Rupees <em>${inWords(Math.round(Number(sale.totalAmount)))} Only</em>
-  </div>
-
   <!-- GST Breakdown Table -->
   <table class="gst-table">
     <thead>${gstTableHeader}</thead>

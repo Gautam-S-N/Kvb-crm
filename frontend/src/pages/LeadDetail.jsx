@@ -54,7 +54,7 @@ const LeadDetail = () => {
   const { users, fetchUsers } = useUserStore();
   const { products, fetchProducts } = useProductStore();
   const {
-    leadQuotations, fetchLeadQuotations, createQuotation, downloadPDF, isLoading: quotLoading
+    leadQuotations, fetchLeadQuotations, createQuotation, downloadPDF, downloadDOCX, isLoading: quotLoading
   } = useQuotationStore();
 
   // Tab state
@@ -87,6 +87,33 @@ const LeadDetail = () => {
   const [quotItems, setQuotItems] = useState([EMPTY_QUOTATION_ITEM()]);
   const [quotMeta, setQuotMeta] = useState({ validUntil: '', paymentTerms: '', deliveryTerms: '', notes: '', discountPercent: 0 });
   const [quotSubmitting, setQuotSubmitting] = useState(false);
+  const [quotTemplateType, setQuotTemplateType] = useState('STANDARD');
+
+  // Solar Tunnel Dryer custom fields — pre-filled with docx defaults
+  const DRYER_DEFAULTS = {
+    toName: '',
+    qtnDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+    quotRef: '',
+    subjectLine: 'QTN.KVB.STD.005. A.080426 Solar Tunnel Dryer for 20w x 54L = 1080 Sq ft',
+    productType: 'Rectangular type with top parabolic Shape',
+    dimensions: '54ft L X 20 ft W X 8.5 ft H',
+    centerHeight: '8.5 feet',
+    structureDoor: 'GP Square Pipe Frame 25x25mm',
+    purlin: 'GP Square Pipe 40mm x 40mm',
+    arch: 'GP Square pipe 40x40mm',
+    traySize: 'Tray size 2ftx3ft – Customer Scope',
+    itemDesc: 'Supply and installation of Polycarbonate sheet covered Solar Tunnel Dryer 1080 Sq ft.',
+    qty: 1,
+    units: 'Sqft',
+    unitPrice: '',
+    totalAmt: '',
+    paymentTerms: '– 70% Advance along with PO 30% against Performa invoice after inspection at factory prior to despatch',
+    deliveryTerms: 'To your account',
+    packingTerms: 'Packing – 3% extra (Bubble sheet / corrugated sheet)',
+    freightTerms: 'Freight and insurance – To your account',
+    gstRate: 18,
+  };
+  const [dryerFields, setDryerFields] = useState({ ...DRYER_DEFAULTS });
 
   useEffect(() => {
     getLead(id);
@@ -173,28 +200,77 @@ const LeadDetail = () => {
 
   const handleCreateQuotation = async (e) => {
     e.preventDefault();
-    const validItems = quotItems.filter(it => it.productId && it.unitPrice);
-    if (validItems.length === 0) return alert('Add at least one product line item');
     setQuotSubmitting(true);
-    const { discountPercent, ...meta } = quotMeta;
-    const res = await createQuotation({
-      leadId: id,
-      discountPercent: parseFloat(discountPercent) || 0,
-      ...meta,
-      items: validItems.map(it => ({
-        productId: it.productId,
-        description: it.description,
-        quantity: parseInt(it.quantity) || 1,
-        unitPrice: parseFloat(it.unitPrice),
-        discount: parseFloat(it.discount) || 0,
-        taxRate: parseFloat(it.taxRate) || 18,
-      }))
-    });
+
+    let payload;
+
+    if (quotTemplateType === 'SOLAR_TUNNEL_DRYER') {
+      // For dryer template we create a synthetic single-item quotation
+      // so that convertToSale always has proper numeric data.
+      const unitP = parseFloat(dryerFields.unitPrice) || 0;
+      const totalA = parseFloat(dryerFields.totalAmt)  || unitP;
+      // We use the first active product as a placeholder item.
+      // If no products exist, we skip items (backend handles empty array).
+      const placeholderProduct = products.find(p => p.isActive);
+      const syntheticItems = placeholderProduct ? [{
+        productId: placeholderProduct.id,
+        description: dryerFields.itemDesc,
+        quantity: parseInt(dryerFields.qty) || 1,
+        unitPrice: unitP,
+        discount: 0,
+        taxRate: dryerFields.gstRate || 18,
+      }] : [];
+
+      payload = {
+        leadId: id,
+        templateType: 'SOLAR_TUNNEL_DRYER',
+        customFields: {
+          ...dryerFields,
+          toName: dryerFields.toName || currentLead?.customer?.contactName,
+          qty: parseInt(dryerFields.qty) || 1,
+          unitPrice: unitP,
+          totalAmt: totalA,
+          gstRate: dryerFields.gstRate || 18,
+        },
+        items: syntheticItems,
+        paymentTerms: dryerFields.paymentTerms,
+        deliveryTerms: dryerFields.deliveryTerms,
+        notes: '',
+        discountPercent: 0,
+      };
+    } else {
+      // STANDARD template
+      const validItems = quotItems.filter(it => it.productId && it.unitPrice);
+      if (validItems.length === 0) {
+        setQuotSubmitting(false);
+        return alert('Add at least one product line item');
+      }
+      const { discountPercent, ...meta } = quotMeta;
+      payload = {
+        leadId: id,
+        templateType: 'STANDARD',
+        customFields: null,
+        discountPercent: parseFloat(discountPercent) || 0,
+        ...meta,
+        items: validItems.map(it => ({
+          productId: it.productId,
+          description: it.description,
+          quantity: parseInt(it.quantity) || 1,
+          unitPrice: parseFloat(it.unitPrice),
+          discount: parseFloat(it.discount) || 0,
+          taxRate: parseFloat(it.taxRate) || 18,
+        }))
+      };
+    }
+
+    const res = await createQuotation(payload);
     setQuotSubmitting(false);
     if (res.success) {
       setShowQuotationForm(false);
       setQuotItems([EMPTY_QUOTATION_ITEM()]);
       setQuotMeta({ validUntil: '', paymentTerms: '', deliveryTerms: '', notes: '', discountPercent: 0 });
+      setQuotTemplateType('STANDARD');
+      setDryerFields({ ...DRYER_DEFAULTS });
     } else {
       alert(res.error || 'Failed to create quotation');
     }
@@ -739,6 +815,11 @@ const LeadDetail = () => {
                                   title="Download PDF">
                                   <Download size={14} />
                                 </button>
+                                <button onClick={() => downloadDOCX(q.id, q.quotationNumber)}
+                                  className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                  title="Download DOCX">
+                                  <FileText size={14} />
+                                </button>
                               </div>
                             </div>
                             <div className="flex gap-4 mt-2 text-xs text-gray-500">
@@ -755,116 +836,325 @@ const LeadDetail = () => {
                       <form onSubmit={handleCreateQuotation} className="bg-violet-50 border border-violet-200 rounded-xl p-5 space-y-4">
                         <h4 className="font-bold text-violet-900 text-sm">New Quotation</h4>
 
-                        {/* Line Items */}
+                        {/* ── Template Selector ── */}
                         <div>
-                          <div className="flex justify-between items-center mb-2">
-                            <label className="text-xs font-bold text-violet-900">Line Items</label>
-                            <button type="button" onClick={addQuotItem}
-                              className="text-xs text-violet-700 hover:text-violet-900 font-semibold flex items-center gap-1">
-                              <Plus size={12} /> Add Line
-                            </button>
-                          </div>
-                          <div className="space-y-2">
-                            {quotItems.map((item, idx) => (
-                              <div key={idx} className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
-                                <div className="flex gap-2">
-                                  <select value={item.productId} onChange={e => handleQuotProductSelect(idx, e.target.value)}
-                                    className="flex-1 text-sm p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400">
-                                    <option value="">-- Select Product --</option>
-                                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                  </select>
-                                  {quotItems.length > 1 && (
-                                    <button type="button" onClick={() => removeQuotItem(idx)}
-                                      className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                                      <X size={14} />
-                                    </button>
-                                  )}
-                                </div>
-                                <div className="grid grid-cols-4 gap-2 text-sm">
-                                  <div>
-                                    <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Qty</label>
-                                    <input type="number" min={1} value={item.quantity}
-                                      onChange={e => updateQuotItem(idx, 'quantity', e.target.value)}
-                                      className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Unit Price ₹</label>
-                                    <input type="number" min={0} value={item.unitPrice}
-                                      onChange={e => updateQuotItem(idx, 'unitPrice', e.target.value)}
-                                      className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Disc %</label>
-                                    <input type="number" min={0} max={100} value={item.discount}
-                                      onChange={e => updateQuotItem(idx, 'discount', e.target.value)}
-                                      className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Tax %</label>
-                                    <input type="number" min={0} value={item.taxRate}
-                                      onChange={e => updateQuotItem(idx, 'taxRate', e.target.value)}
-                                      className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                  </div>
-                                </div>
-                                <input value={item.description} onChange={e => updateQuotItem(idx, 'description', e.target.value)}
-                                  placeholder="Custom description (optional)"
-                                  className="w-full p-1.5 border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-violet-400" />
-                              </div>
-                            ))}
-                          </div>
+                          <label className="text-xs font-bold text-violet-900 block mb-1">Quotation Template</label>
+                          <select
+                            value={quotTemplateType}
+                            onChange={e => setQuotTemplateType(e.target.value)}
+                            className="w-full p-2 border border-violet-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-violet-500 bg-white font-semibold text-violet-800"
+                          >
+                            <option value="STANDARD">Standard Quotation</option>
+                            <option value="SOLAR_TUNNEL_DRYER">Solar Tunnel Dryer</option>
+                            {/* Add new product templates here — they auto-appear in the dropdown */}
+                          </select>
                         </div>
 
-                        {/* Meta fields */}
-                        <div className="grid grid-cols-2 gap-3 text-sm">
+                        {/* ══════════════════════════════════ */}
+                        {/* STANDARD template — existing form */}
+                        {/* ══════════════════════════════════ */}
+                        {quotTemplateType === 'STANDARD' && (<>
                           <div>
-                            <label className="text-xs font-bold text-violet-900 block mb-1">Valid Until</label>
-                            <input type="date" value={quotMeta.validUntil}
-                              onChange={e => setQuotMeta({ ...quotMeta, validUntil: e.target.value })}
-                              className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-violet-900 block mb-1">Overall Discount %</label>
-                            <input type="number" min={0} max={100} value={quotMeta.discountPercent}
-                              onChange={e => setQuotMeta({ ...quotMeta, discountPercent: e.target.value })}
-                              className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-violet-900 block mb-1">Payment Terms</label>
-                            <input value={quotMeta.paymentTerms} onChange={e => setQuotMeta({ ...quotMeta, paymentTerms: e.target.value })}
-                              placeholder="e.g. 50% advance, balance on delivery"
-                              className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                          </div>
-                          <div>
-                            <label className="text-xs font-bold text-violet-900 block mb-1">Delivery Terms</label>
-                            <input value={quotMeta.deliveryTerms} onChange={e => setQuotMeta({ ...quotMeta, deliveryTerms: e.target.value })}
-                              placeholder="e.g. Ex-works, within 7 days"
-                              className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                          </div>
-                          <div className="col-span-2">
-                            <label className="text-xs font-bold text-violet-900 block mb-1">Notes</label>
-                            <textarea value={quotMeta.notes} onChange={e => setQuotMeta({ ...quotMeta, notes: e.target.value })}
-                              rows={2} placeholder="Internal notes or additional remarks"
-                              className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm resize-none" />
-                          </div>
-                        </div>
-
-                        {/* Totals Preview */}
-                        <div className="bg-white border border-violet-200 rounded-xl p-3 text-sm space-y-1">
-                          <div className="flex justify-between text-gray-600">
-                            <span>Subtotal</span><span>₹{totals.sub.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                          </div>
-                          {totals.discountAmt > 0 && (
-                            <div className="flex justify-between text-red-500">
-                              <span>Discount</span><span>-₹{totals.discountAmt.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                            <div className="flex justify-between items-center mb-2">
+                              <label className="text-xs font-bold text-violet-900">Line Items</label>
+                              <button type="button" onClick={addQuotItem}
+                                className="text-xs text-violet-700 hover:text-violet-900 font-semibold flex items-center gap-1">
+                                <Plus size={12} /> Add Line
+                              </button>
                             </div>
-                          )}
-                          <div className="flex justify-between text-gray-600">
-                            <span>GST (18%)</span><span>₹{totals.tax.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                            <div className="space-y-2">
+                              {quotItems.map((item, idx) => (
+                                <div key={idx} className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
+                                  <div className="flex gap-2">
+                                    <select value={item.productId} onChange={e => handleQuotProductSelect(idx, e.target.value)}
+                                      className="flex-1 text-sm p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400">
+                                      <option value="">-- Select Product --</option>
+                                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                    </select>
+                                    {quotItems.length > 1 && (
+                                      <button type="button" onClick={() => removeQuotItem(idx)}
+                                        className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
+                                        <X size={14} />
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div className="grid grid-cols-4 gap-2 text-sm">
+                                    <div>
+                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Qty</label>
+                                      <input type="number" min={1} value={item.quantity}
+                                        onChange={e => updateQuotItem(idx, 'quantity', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Unit Price ₹</label>
+                                      <input type="number" min={0} value={item.unitPrice}
+                                        onChange={e => updateQuotItem(idx, 'unitPrice', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Disc %</label>
+                                      <input type="number" min={0} max={100} value={item.discount}
+                                        onChange={e => updateQuotItem(idx, 'discount', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Tax %</label>
+                                      <input type="number" min={0} value={item.taxRate}
+                                        onChange={e => updateQuotItem(idx, 'taxRate', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
+                                    </div>
+                                  </div>
+                                  <input value={item.description} onChange={e => updateQuotItem(idx, 'description', e.target.value)}
+                                    placeholder="Custom description (optional)"
+                                    className="w-full p-1.5 border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-violet-400" />
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          <div className="flex justify-between font-bold text-violet-800 pt-1 border-t border-violet-100">
-                            <span>Grand Total</span><span>₹{totals.total.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                          <div className="grid grid-cols-2 gap-3 text-sm">
+                            <div>
+                              <label className="text-xs font-bold text-violet-900 block mb-1">Valid Until</label>
+                              <input type="date" value={quotMeta.validUntil}
+                                onChange={e => setQuotMeta({ ...quotMeta, validUntil: e.target.value })}
+                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
+                            </div>
+                            <div>
+                              <label className="text-xs font-bold text-violet-900 block mb-1">Overall Discount %</label>
+                              <input type="number" min={0} max={100} value={quotMeta.discountPercent}
+                                onChange={e => setQuotMeta({ ...quotMeta, discountPercent: e.target.value })}
+                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
+                            </div>
+                            <div>
+                              <label className="text-xs font-bold text-violet-900 block mb-1">Payment Terms</label>
+                              <input value={quotMeta.paymentTerms} onChange={e => setQuotMeta({ ...quotMeta, paymentTerms: e.target.value })}
+                                placeholder="e.g. 50% advance, balance on delivery"
+                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
+                            </div>
+                            <div>
+                              <label className="text-xs font-bold text-violet-900 block mb-1">Delivery Terms</label>
+                              <input value={quotMeta.deliveryTerms} onChange={e => setQuotMeta({ ...quotMeta, deliveryTerms: e.target.value })}
+                                placeholder="e.g. Ex-works, within 7 days"
+                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
+                            </div>
+                            <div className="col-span-2">
+                              <label className="text-xs font-bold text-violet-900 block mb-1">Notes</label>
+                              <textarea value={quotMeta.notes} onChange={e => setQuotMeta({ ...quotMeta, notes: e.target.value })}
+                                rows={2} placeholder="Internal notes or additional remarks"
+                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm resize-none" />
+                            </div>
                           </div>
-                        </div>
+                          <div className="bg-white border border-violet-200 rounded-xl p-3 text-sm space-y-1">
+                            <div className="flex justify-between text-gray-600">
+                              <span>Subtotal</span><span>₹{totals.sub.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                            </div>
+                            {totals.discountAmt > 0 && (
+                              <div className="flex justify-between text-red-500">
+                                <span>Discount</span><span>-₹{totals.discountAmt.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between text-gray-600">
+                              <span>GST (18%)</span><span>₹{totals.tax.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                            </div>
+                            <div className="flex justify-between font-bold text-violet-800 pt-1 border-t border-violet-100">
+                              <span>Grand Total</span><span>₹{totals.total.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                            </div>
+                          </div>
+                        </>)}
+
+                        {/* ═══════════════════════════════════════════ */}
+                        {/* SOLAR TUNNEL DRYER template — custom fields */}
+                        {/* ═══════════════════════════════════════════ */}
+                        {quotTemplateType === 'SOLAR_TUNNEL_DRYER' && (
+                          <div className="space-y-3">
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 font-medium">
+                              📋 Fields below match the Solar Tunnel Dryer quotation format. All highlighted (yellow) fields from the docx are editable here.
+                            </div>
+
+                            {/* Row 1: To / Date / Ref */}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div className="col-span-1">
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">To (Customer Name)</label>
+                                <input value={dryerFields.toName}
+                                  onChange={e => setDryerFields({ ...dryerFields, toName: e.target.value })}
+                                  placeholder={currentLead?.customer?.contactName || 'Mr. / Ms. ...'}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Date</label>
+                                <input value={dryerFields.qtnDate}
+                                  onChange={e => setDryerFields({ ...dryerFields, qtnDate: e.target.value })}
+                                  placeholder="DD/MM/YYYY"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Quotation Ref No.</label>
+                                <input value={dryerFields.quotRef}
+                                  onChange={e => setDryerFields({ ...dryerFields, quotRef: e.target.value })}
+                                  placeholder="QTN.KVB.STD.005..."
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Subject */}
+                            <div>
+                              <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Subject Line (Sub:)</label>
+                              <input value={dryerFields.subjectLine}
+                                onChange={e => setDryerFields({ ...dryerFields, subjectLine: e.target.value })}
+                                className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                            </div>
+
+                            {/* Product Type */}
+                            <div>
+                              <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Product Type / Shape</label>
+                              <input value={dryerFields.productType}
+                                onChange={e => setDryerFields({ ...dryerFields, productType: e.target.value })}
+                                placeholder="e.g. Rectangular type with top parabolic Shape"
+                                className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                            </div>
+
+                            {/* Dimensions / Height / Tray + Structure fields */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Dimensions (L×W×H)</label>
+                                <input value={dryerFields.dimensions}
+                                  onChange={e => setDryerFields({ ...dryerFields, dimensions: e.target.value })}
+                                  placeholder="54ft L X 20 ft W X 8.5 ft H"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Center Height</label>
+                                <input value={dryerFields.centerHeight}
+                                  onChange={e => setDryerFields({ ...dryerFields, centerHeight: e.target.value })}
+                                  placeholder="8.5 feet"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Structure &amp; Door</label>
+                                <input value={dryerFields.structureDoor}
+                                  onChange={e => setDryerFields({ ...dryerFields, structureDoor: e.target.value })}
+                                  placeholder="GP Square Pipe Frame 25x25mm"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Structure Purlin</label>
+                                <input value={dryerFields.purlin}
+                                  onChange={e => setDryerFields({ ...dryerFields, purlin: e.target.value })}
+                                  placeholder="GP Square Pipe 40mm x 40mm"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Arch</label>
+                                <input value={dryerFields.arch}
+                                  onChange={e => setDryerFields({ ...dryerFields, arch: e.target.value })}
+                                  placeholder="GP Square pipe 40x40mm"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Tray Size</label>
+                                <input value={dryerFields.traySize}
+                                  onChange={e => setDryerFields({ ...dryerFields, traySize: e.target.value })}
+                                  placeholder="2ft x 3ft – Customer Scope"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Item Description */}
+                            <div>
+                              <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Item Description (shown in table)</label>
+                              <textarea value={dryerFields.itemDesc}
+                                onChange={e => setDryerFields({ ...dryerFields, itemDesc: e.target.value })}
+                                rows={2}
+                                className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white resize-none" />
+                            </div>
+
+                            {/* Qty / Units / Unit Price / Total */}
+                            <div className="grid grid-cols-4 gap-2">
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Quantity</label>
+                                <input type="number" min={1} value={dryerFields.qty}
+                                  onChange={e => {
+                                    const rawVal = e.target.value;
+                                    const parsedQty = parseFloat(rawVal) || 1;
+                                    const parsedPrice = parseFloat(dryerFields.unitPrice) || 0;
+                                    setDryerFields({ ...dryerFields, qty: rawVal, totalAmt: parsedQty * parsedPrice });
+                                  }}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Units</label>
+                                <input value={dryerFields.units}
+                                  onChange={e => setDryerFields({ ...dryerFields, units: e.target.value })}
+                                  placeholder="Sqft"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Unit Price (₹)</label>
+                                <input type="number" min={0} value={dryerFields.unitPrice}
+                                  onChange={e => {
+                                    const rawPrice = e.target.value;
+                                    const parsedPrice = parseFloat(rawPrice) || 0;
+                                    const parsedQty = parseFloat(dryerFields.qty) || 1;
+                                    setDryerFields({ ...dryerFields, unitPrice: rawPrice, totalAmt: parsedQty * parsedPrice });
+                                  }}
+                                  placeholder="e.g. 583200"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Total Amount (₹)</label>
+                                <input type="number" min={0} value={dryerFields.totalAmt}
+                                  onChange={e => setDryerFields({ ...dryerFields, totalAmt: e.target.value })}
+                                  placeholder="e.g. 583200"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Payment / Delivery / Packing / Freight / GST */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Payment Terms</label>
+                                <input value={dryerFields.paymentTerms}
+                                  onChange={e => setDryerFields({ ...dryerFields, paymentTerms: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Delivery</label>
+                                <input value={dryerFields.deliveryTerms}
+                                  onChange={e => setDryerFields({ ...dryerFields, deliveryTerms: e.target.value })}
+                                  placeholder="To your account"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">GST Rate (%)</label>
+                                <input type="number" min={0} value={dryerFields.gstRate}
+                                  onChange={e => setDryerFields({ ...dryerFields, gstRate: parseFloat(e.target.value) || 18 })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Packing Terms</label>
+                                <input value={dryerFields.packingTerms}
+                                  onChange={e => setDryerFields({ ...dryerFields, packingTerms: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Freight &amp; Insurance</label>
+                                <input value={dryerFields.freightTerms}
+                                  onChange={e => setDryerFields({ ...dryerFields, freightTerms: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-amber-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Total preview */}
+                            {dryerFields.totalAmt && (
+                              <div className="bg-white border border-amber-200 rounded-xl p-3 text-sm">
+                                <div className="flex justify-between font-bold text-amber-800">
+                                  <span>Total Quotation Value</span>
+                                  <span>₹{Number(dryerFields.totalAmt).toLocaleString('en-IN')}/-</span>
+                                </div>
+                                <div className="text-xs text-gray-500 mt-0.5">GST @ {dryerFields.gstRate}% — Included</div>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         <button type="submit" disabled={quotSubmitting}
                           className="w-full py-2.5 bg-violet-700 text-white rounded-xl font-bold hover:bg-violet-800 text-sm transition-colors disabled:opacity-50 shadow-sm">

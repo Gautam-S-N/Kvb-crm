@@ -9,6 +9,7 @@ router.get('/', quotationController.getQuotations);
 router.post('/', quotationController.createQuotation);
 router.get('/:id', quotationController.getQuotationById);
 router.get('/:id/pdf', quotationController.generatePDF);
+router.get('/:id/docx', quotationController.generateDOCX);
 router.post('/:id/convert', quotationController.convertToSale);
 
 module.exports = router;

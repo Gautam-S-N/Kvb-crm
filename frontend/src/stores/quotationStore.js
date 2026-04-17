@@ -78,6 +78,27 @@ export const useQuotationStore = create((set, get) => ({
     }
   },
 
+  downloadDOCX: async (id, quotationNumber) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/quotations/${id}/docx`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) throw new Error('DOCX generation failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Quotation-${quotationNumber}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Failed to download DOCX' };
+    }
+  },
+
   convertToSale: async (id) => {
     try {
       const res = await api.post(`/quotations/${id}/convert`);

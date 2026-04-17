@@ -24,7 +24,7 @@ const fmtDate = (d) =>
 
 export default function Quotations() {
   const navigate = useNavigate();
-  const { quotations, isLoading, pagination, fetchQuotations, downloadPDF, convertToSale } = useQuotationStore();
+  const { quotations, isLoading, pagination, fetchQuotations, downloadPDF, downloadDOCX, convertToSale } = useQuotationStore();
   const { user } = useAuthStore();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -170,6 +170,14 @@ export default function Quotations() {
                             >
                               <Download size={15} />
                             </button>
+                            <button
+                              id={`download-docx-${q.id}`}
+                              onClick={() => downloadDOCX(q.id, q.quotationNumber)}
+                              className="p-1.5 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 rounded-lg transition-colors"
+                              title="Download DOCX"
+                            >
+                              <FileText size={15} />
+                            </button>
                             {isAdmin && (
                               <button
                                 id={`convert-sale-${q.id}`}
@@ -213,6 +221,10 @@ export default function Quotations() {
                       <button onClick={() => downloadPDF(q.id, q.quotationNumber)}
                         className="flex items-center gap-1 text-xs px-3 py-1.5 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 rounded-lg font-medium">
                         <Download size={13} /> PDF
+                      </button>
+                      <button onClick={() => downloadDOCX(q.id, q.quotationNumber)}
+                        className="flex items-center gap-1 text-xs px-3 py-1.5 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 rounded-lg font-medium">
+                        <FileText size={13} /> DOCX
                       </button>
                       {isAdmin && q.status !== 'CONVERTED_TO_SALE' && (
                         <button onClick={() => handleConvert(q)}

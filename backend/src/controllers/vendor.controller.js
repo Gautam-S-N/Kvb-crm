@@ -5,7 +5,7 @@ exports.getVendors = async (req, res) => {
   try {
     const { search, page = 1, limit = 20 } = req.query;
 
-    const where = {};
+    const where = { NOT: { companyName: '__MANUAL_ENTRY__' } };
     if (search) {
       where.OR = [
         { companyName: { contains: search } },

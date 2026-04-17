@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { usePurchaseStore } from '../stores/purchaseStore';
-import { Plus, Search, Filter, Download, Truck, Calendar, ShoppingBag } from 'lucide-react';
+import { Plus, Search, Filter, FileText, FileSpreadsheet, File, Truck, ShoppingBag } from 'lucide-react';
 
 const STATUS_COLORS = {
   PENDING:   'bg-yellow-100 text-yellow-800',
@@ -16,7 +16,11 @@ const fmtDate  = (d) => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digi
 
 export default function PurchaseOrders() {
   const navigate = useNavigate();
-  const { purchaseOrders, isLoading, poPagination, fetchPurchaseOrders, updatePurchaseOrder } = usePurchaseStore();
+  const {
+    purchaseOrders, isLoading, poPagination,
+    fetchPurchaseOrders, updatePurchaseOrder,
+    downloadPODOCX, downloadPOXLSX
+  } = usePurchaseStore();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
@@ -38,14 +42,13 @@ export default function PurchaseOrders() {
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = `PO-${poNumber}.pdf`;
-      a.click();
+      a.href = url; a.download = `PO-${poNumber}.pdf`; a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      alert('Failed to download PO PDF.');
-    }
+    } catch { alert('Failed to download PO PDF.'); }
   };
+
+  const handleDownloadDOCX = (poId, poNumber) => downloadPODOCX(poId, poNumber);
+  const handleDownloadXLSX = (poId, poNumber) => downloadPOXLSX(poId, poNumber);
 
   const updateStatus = async (id, status) => {
     await updatePurchaseOrder(id, { status, ...(status === 'RECEIVED' ? { receivedDate: new Date() } : {}) });
@@ -133,7 +136,9 @@ export default function PurchaseOrders() {
                 {purchaseOrders.map(po => (
                   <tr key={po.id} className="hover:bg-gray-50 text-gray-700">
                     <td className="px-4 py-3 font-mono font-medium text-gray-900">{po.poNumber}</td>
-                    <td className="px-4 py-3 font-medium">{po.vendor.companyName}</td>
+                    <td className="px-4 py-3 font-medium">
+                      {po.vendor?.companyName || (() => { try { return JSON.parse(po.notes||'{}').vendorName || '—'; } catch { return '—'; } })()}
+                    </td>
                     <td className="px-4 py-3 font-bold text-gray-900">{fmtMoney(po.totalAmount)}</td>
                     <td className="px-4 py-3 text-gray-500">{fmtDate(po.orderDate)}</td>
                     <td className="px-4 py-3 text-gray-500">{fmtDate(po.expectedDate)}</td>
@@ -149,14 +154,24 @@ export default function PurchaseOrders() {
                         <option value="CANCELLED">CANCELLED</option>
                       </select>
                     </td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => handleDownloadPDF(po.id, po.poNumber)}
-                        className="p-1 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                        title="Download PO PDF"
-                      >
-                        <Download size={18} />
-                      </button>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => handleDownloadPDF(po.id, po.poNumber)}
+                          title="Download PDF"
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-red-50 hover:bg-red-100 text-red-700 rounded transition-colors font-medium"
+                        >
+                          <File size={13} /> PDF
+                        </button>
+
+                        <button
+                          onClick={() => handleDownloadXLSX(po.id, po.poNumber)}
+                          title="Download XLSX"
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-green-50 hover:bg-green-100 text-green-700 rounded transition-colors font-medium"
+                        >
+                          <FileSpreadsheet size={13} /> XLSX
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

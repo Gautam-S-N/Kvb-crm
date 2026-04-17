@@ -407,6 +407,10 @@ model Quotation {
 
   pdfUrl          String?
 
+  // Template system — extensible for any future product format
+  templateType    String          @default("STANDARD")
+  customFields    Json?
+
   leadId          String
   lead            Lead            @relation(fields: [leadId], references: [id])
 
@@ -551,6 +555,7 @@ model Vendor {
   address         String?         @db.Text
   city            String?
   state           String?
+  pinCode         String?
   gstNumber       String?
   paymentTerms    String?
   isActive        Boolean         @default(true)
@@ -611,6 +616,7 @@ model PurchaseOrderItem {
 
   itemName        String
   description     String?       @db.Text
+  hsnCode         String?
   quantity        Int
   unitPrice       Decimal       @db.Decimal(15, 2)
   totalPrice      Decimal       @db.Decimal(15, 2)

@@ -118,6 +118,36 @@ export const usePurchaseStore = create((set, get) => ({
     }
   },
 
+  downloadPOPDF: async (id, poNumber) => {
+    try {
+      const res = await api.get(`/purchase/${id}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `PO-${poNumber}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert('Failed to download PDF'); }
+  },
+
+  downloadPODOCX: async (id, poNumber) => {
+    try {
+      const res = await api.get(`/purchase/${id}/docx`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `PO-${poNumber}.docx`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert('Failed to download DOCX'); }
+  },
+
+  downloadPOXLSX: async (id, poNumber) => {
+    try {
+      const res = await api.get(`/purchase/${id}/xlsx`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = `PO-${poNumber}.xlsx`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) { alert('Failed to download XLSX'); }
+  },
+
   clearError: () => set({ error: null }),
   clearCurrentPO: () => set({ currentPO: null })
 }));
