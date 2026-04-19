@@ -34,7 +34,8 @@ replacements = {
     'Packing \u2013 3% extra (Bubble sheet / corrugated sheet)': '{packingTerms}',
     'Freight and insurance \u2013 To your account': '{freightTerms}',
     'presently 18%': '{gstRate}',
-    'Five Lakh Eighty Three Thousand Two Hundred': '{amountWords}',
+    'Five Lakh Eighty Three Thousand Two Hundred Rupees Only': '{amountWords}',
+    'Five Lakhs Eight Three Thousand Two Hundred Rupees Only': '{amountWords}',
 }
 
 def replace_in_para(para):

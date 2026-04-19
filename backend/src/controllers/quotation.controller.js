@@ -2,12 +2,29 @@ const prisma = require('../utils/db');
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
+const { numberToWords } = require('../utils/numberToWords');
 
 // Generate quotation number
 const generateQuotationNumber = async () => {
   const count = await prisma.quotation.count();
   return `Q-${String(count + 1).padStart(5, '0')}`;
 };
+
+// ─── Load company logo as Base64 (embedded in PDF — Puppeteer can't fetch URLs) ─
+const getLogoBase64 = () => {
+  const exts = ['png', 'jpg', 'jpeg', 'svg', 'webp'];
+  const assetsDir = path.join(__dirname, '../assets');
+  for (const ext of exts) {
+    const logoPath = path.join(assetsDir, `logo.${ext}`);
+    if (fs.existsSync(logoPath)) {
+      const data = fs.readFileSync(logoPath);
+      const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', svg: 'image/svg+xml', webp: 'image/webp' };
+      return `data:${mimeMap[ext]};base64,${data.toString('base64')}`;
+    }
+  }
+  return null;
+};
+
 
 // Get all quotations
 exports.getQuotations = async (req, res) => {
@@ -192,8 +209,15 @@ exports.createQuotation = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 function buildStandardHTML(quotation) {
+  const logoSrc = getLogoBase64();
   const itemsRows = quotation.items.map((item, i) => {
-    const itemTaxable = Number(item.totalPrice);
+    const qty = Number(item.quantity);
+    const rate = Number(item.unitPrice);
+    const disc = Number(item.discount) || 0;
+    const itemTaxable = qty * rate * (1 - disc / 100);
+    const hsn = item.product?.hsnCode || '';
+    const uom = item.product?.unitOfMeasure || 'Nos';
+
     return `
       <tr>
         <td style="text-align:center;border:1px solid #999;padding:6px 4px;">${i + 1}</td>
@@ -201,10 +225,10 @@ function buildStandardHTML(quotation) {
           <strong>${item.product.name}</strong>
           ${(item.description || item.product.description) ? `<br/><small style="color:#555">${item.description || item.product.description}</small>` : ''}
         </td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${item.product.hsnCode || ''}</td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${Number(item.quantity)} ${item.product.unitOfMeasure}</td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${Number(item.unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${item.product.unitOfMeasure}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${hsn}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${qty}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${rate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${uom}</td>
         <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${itemTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
       </tr>`;
   }).join('');
@@ -215,34 +239,38 @@ function buildStandardHTML(quotation) {
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; font-size: 12px; color: #111; padding: 24px 32px; }
   .outer-border { border: 2px solid #333; }
-  .title-bar { text-align: center; font-size: 16px; font-weight: bold; border-bottom: 2px solid #333; padding: 6px 0; letter-spacing: 1px; }
-  .top-grid { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #777; }
-  .company-block { padding: 10px 12px; border-right: 1px solid #777; }
-  .company-block .name { font-size: 15px; font-weight: bold; color: #15803d; }
-  .company-block p { margin-top: 3px; line-height: 1.5; }
+  .title-bar { text-align: center; font-size: 16px; font-weight: bold; border-bottom: 2px solid #333; padding: 8px 0; letter-spacing: 2px; text-transform: uppercase; }
+  .top-grid { display: grid; grid-template-columns: 55% 45%; border-bottom: 1px solid #777; }
+  .company-block { padding: 10px 14px; border-right: 1px solid #777; }
+  .company-block .name { font-size: 16px; font-weight: bold; color: #15803d; margin-bottom: 4px; }
+  .company-block p { margin-top: 2px; line-height: 1.5; font-size: 11.5px; }
   .meta-block { padding: 0; }
-  .meta-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #aaa; }
+  .meta-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #bbb; }
   .meta-row:last-child { border-bottom: none; }
-  .meta-cell { padding: 5px 8px; font-size: 11px; border-right: 1px solid #aaa; }
+  .meta-cell { padding: 6px 9px; font-size: 11px; border-right: 1px solid #bbb; }
   .meta-cell:last-child { border-right: none; }
-  .meta-label { font-weight: bold; color: #444; font-size: 10px; display: block; }
-  .meta-value { font-size: 11px; }
-  .buyer-dispatch-grid { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #777; }
-  .buyer-block { padding: 10px 12px; border-right: 1px solid #777; }
-  .buyer-block .label { font-size: 10px; font-weight: bold; color: #444; text-transform: uppercase; margin-bottom: 4px; }
+  .meta-label { font-weight: bold; color: #555; font-size: 9.5px; display: block; text-transform: uppercase; }
+  .meta-value { font-size: 11.5px; font-weight: 600; }
+  .buyer-terms-grid { display: grid; grid-template-columns: 55% 45%; border-bottom: 1px solid #777; }
+  .buyer-block { padding: 10px 14px; border-right: 1px solid #777; }
+  .buyer-block .label { font-size: 9.5px; font-weight: bold; color: #555; text-transform: uppercase; margin-bottom: 5px; }
+  .buyer-block p { line-height: 1.6; font-size: 11.5px; }
+  .terms-block { padding: 10px 14px; }
+  .terms-label { font-size: 9.5px; font-weight: bold; color: #555; text-transform: uppercase; margin-bottom: 5px; }
+  .terms-block p { font-size: 11px; margin-bottom: 4px; }
   .section-table { width: 100%; border-collapse: collapse; border-bottom: 1px solid #777; }
-  .section-table th { background: #d1fae5; color: #14532d; padding: 7px 6px; border: 1px solid #999; font-size: 11px; text-align: center; }
-  .section-table td { padding: 6px; border: 1px solid #999; vertical-align: top; font-size: 11px; }
+  .section-table th { background: #d1fae5; color: #14532d; padding: 8px 6px; border: 1px solid #999; font-size: 11px; text-align: center; }
+  .section-table td { padding: 8px; border: 1px solid #999; vertical-align: top; font-size: 11px; }
   .total-row td { font-weight: bold; background: #f0fdf4; }
-  .words-row { padding: 8px 12px; border-bottom: 1px solid #777; font-size: 11px; }
-  .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; min-height: 120px; }
-  .declaration-block { padding: 10px 12px; border-right: 1px solid #777; font-size: 10.5px; line-height: 1.6; }
-  .declaration-block .dec-title { font-weight: bold; margin-bottom: 4px; }
-  .bank-block { padding: 10px 12px; font-size: 10.5px; line-height: 1.7; }
-  .bank-block .bank-title { font-weight: bold; margin-bottom: 4px; }
-  .sig-row { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #777; }
-  .sig-cell { padding: 10px 12px; font-size: 11px; border-right: 1px solid #777; min-height: 70px; display: flex; align-items: flex-end; }
-  .sig-cell:last-child { border-right: none; justify-content: flex-end; }
+  .words-row { padding: 8px 14px; border-bottom: 1px solid #777; font-size: 11px; }
+  .bottom-grid { display: grid; grid-template-columns: 1fr 1fr; min-height: 120px; border-bottom: 1px solid #777; }
+  .declaration-block { padding: 10px 14px; border-right: 1px solid #777; font-size: 10.5px; line-height: 1.6; }
+  .declaration-block .dec-title { font-weight: bold; margin-bottom: 4px; font-size: 11px; }
+  .bank-block { padding: 10px 14px; font-size: 10.5px; line-height: 1.8; }
+  .bank-block .bank-title { font-weight: bold; margin-bottom: 4px; font-size: 11px; text-decoration: underline; }
+  .sig-row { display: grid; grid-template-columns: 1fr 1fr; }
+  .sig-cell { padding: 12px 14px; font-size: 11px; border-right: 1px solid #777; min-height: 80px; display: flex; align-items: flex-end; }
+  .sig-cell:last-child { border-right: none; flex-direction: column; align-items: flex-end; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -250,11 +278,20 @@ function buildStandardHTML(quotation) {
   <div class="title-bar">QUOTATION</div>
   <div class="top-grid">
     <div class="company-block">
+      ${logoSrc ? `
+      <div style="display:flex;align-items:flex-start;gap:10px;">
+        <img src="${logoSrc}" style="width:70px;height:auto;object-fit:contain;">
+        <div style="line-height:1.5;">
+          <div class="name">KVB Green Energies</div>
+          <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad – 580011, Karnataka, India</p>
+          <p>Phone: +91 95455 29950, +91 74118 93555</p>
+          <p style="font-weight:bold;">GSTIN: 29AAXFK4926A1Z0</p>
+        </div>
+      </div>` : `
       <div class="name">KVB Green Energies</div>
       <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad – 580011, Karnataka, India</p>
       <p>Phone: +91 95455 29950, +91 74118 93555</p>
-      <p>GSTIN: 29AAGFK7890M1ZX</p>
-      <p>State: Karnataka</p>
+      <p style="font-weight:bold;">GSTIN: 29AAXFK4926A1Z0</p>`}
     </div>
     <div class="meta-block">
       <div class="meta-row">
@@ -267,16 +304,17 @@ function buildStandardHTML(quotation) {
       </div>
     </div>
   </div>
-  <div class="buyer-dispatch-grid">
+  <div class="buyer-terms-grid">
     <div class="buyer-block">
       <div class="label">Customer (Bill to)</div>
       <p><strong>${quotation.customer.contactName}</strong></p>
       ${quotation.customer.companyName ? `<p>${quotation.customer.companyName}</p>` : ''}
+      ${quotation.customer.address ? `<p>${quotation.customer.address}</p>` : ''}
       <p>Ph: ${quotation.customer.phone}</p>
       ${quotation.customer.email ? `<p>Email: ${quotation.customer.email}</p>` : ''}
     </div>
-    <div class="buyer-block" style="border-right:none;">
-      <div class="label">Payment &amp; Delivery Terms</div>
+    <div class="terms-block">
+      <div class="terms-label">Payment &amp; Delivery Terms</div>
       ${quotation.paymentTerms ? `<p><strong>Payment:</strong> ${quotation.paymentTerms}</p>` : ''}
       ${quotation.deliveryTerms ? `<p><strong>Delivery:</strong> ${quotation.deliveryTerms}</p>` : ''}
     </div>
@@ -285,12 +323,12 @@ function buildStandardHTML(quotation) {
     <thead>
       <tr>
         <th style="width:5%">Sl No.</th>
-        <th style="width:30%">Description of Goods</th>
+        <th style="width:33%">Description of Goods</th>
         <th style="width:10%">HSN/SAC</th>
-        <th style="width:12%">Quantity</th>
-        <th style="width:13%">Rate</th>
-        <th style="width:8%">Per</th>
-        <th style="width:12%">Amount</th>
+        <th style="width:10%">Quantity</th>
+        <th style="width:15%">Rate</th>
+        <th style="width:10%">Per</th>
+        <th style="width:17%">Amount</th>
       </tr>
     </thead>
     <tbody>
@@ -302,7 +340,7 @@ function buildStandardHTML(quotation) {
     </tbody>
   </table>
   <div class="words-row">
-    <strong>Total Quotation Value (in words):</strong> &nbsp;Rupees <em>${quotation.totalAmount.toLocaleString('en-IN')} Only</em>
+    <strong>Total Quotation Value (in words):</strong> &nbsp;<em>Rupees ${numberToWords(quotation.totalAmount)} Only</em>
   </div>
   <div class="bottom-grid">
     <div class="declaration-block">
@@ -323,7 +361,7 @@ function buildStandardHTML(quotation) {
   </div>
   <div class="sig-row">
     <div class="sig-cell">Accepted By (Name &amp; Signature)</div>
-    <div class="sig-cell" style="flex-direction:column;align-items:flex-end;">
+    <div class="sig-cell">
       <p>for <strong>KVB Green Energies</strong></p><br/><br/><br/>
       <p><strong>${quotation.createdBy.firstName} ${quotation.createdBy.lastName}</strong></p>
       <p>Authorised Signatory</p>
@@ -381,20 +419,8 @@ function buildSolarTunnelDryerHTML(quotation) {
 
   const fmt = (v) => Number(v).toLocaleString('en-IN', { minimumFractionDigits: 0 });
 
-  // Amount in words
-  const ones = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
-  const tens = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
-  function inW(n) {
-    if (n === 0) return 'Zero';
-    if (n < 20) return ones[n];
-    if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? ' '+ones[n%10] : '');
-    if (n < 1000) return ones[Math.floor(n/100)] + ' Hundred' + (n%100 ? ' '+inW(n%100) : '');
-    if (n < 100000) return inW(Math.floor(n/1000)) + ' Thousand' + (n%1000 ? ' '+inW(n%1000) : '');
-    if (n < 10000000) return inW(Math.floor(n/100000)) + ' Lakh' + (n%100000 ? ' '+inW(n%100000) : '');
-    return inW(Math.floor(n/10000000)) + ' Crore' + (n%10000000 ? ' '+inW(n%10000000) : '');
-  }
   // Amount in words — derives from totalAmt (same variable as Grand Total cell — always in sync)
-  const amountWords = inW(Math.round(totalAmt)) + ' Rupees Only';
+  const amountWords = numberToWords(totalAmt);
 
   return `<!DOCTYPE html>
 <html>
@@ -882,19 +908,7 @@ exports.generateDOCX = async (req, res) => {
       const rawTotal = Number(quotation.totalAmount) || Number(cf.totalAmt) || Number(cf.unitPrice) || 0;
       const totalAmt = rawTotal.toLocaleString('en-IN');
 
-      const ones = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
-      const tens = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
-      function inW(n) {
-        if (n === 0) return 'Zero';
-        if (n < 20) return ones[n];
-        if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? ' '+ones[n%10] : '');
-        if (n < 1000) return ones[Math.floor(n/100)] + ' Hundred' + (n%100 ? ' '+inW(n%100) : '');
-        if (n < 100000) return inW(Math.floor(n/1000)) + ' Thousand' + (n%1000 ? ' '+inW(n%1000) : '');
-        if (n < 10000000) return inW(Math.floor(n/100000)) + ' Lakh' + (n%100000 ? ' '+inW(n%100000) : '');
-        return inW(Math.floor(n/10000000)) + ' Crore' + (n%10000000 ? ' '+inW(n%10000000) : '');
-      }
-
-      const totalAmtWords = inW(Math.round(Number(cf.totalAmt || quotation.totalAmount || 0))) + ' Rupees Only';
+      const totalAmtWords = numberToWords(Number(cf.totalAmt || quotation.totalAmount || 0));
 
       const rawUnitPrice = Number(cf.unitPrice) || Number(quotation.totalAmount) || 0;
       doc.render({

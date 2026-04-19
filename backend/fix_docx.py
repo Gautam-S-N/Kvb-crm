@@ -8,15 +8,13 @@ for p in doc.paragraphs:
     if 'Five' in p.text and 'Lakh' in p.text:
         original = p.text
         # We replace the text inside the Run objects so we don't lose formatting
-        for run in p.runs:
-            if 'Five Lakhs' in run.text:
-                run.text = run.text.replace('Five Lakhs Eight Three Thousand Two Hundred Rupees Only', '{amountWords}')
+        for target in ['Five Lakh Eighty Three Thousand Two Hundred Rupees Only', 
+                       'Five Lakhs Eight Three Thousand Two Hundred Rupees Only',
+                       'Five Lakh Eighty Three Thousand Two Hundred']:
+            if target in p.text:
+                p.text = p.text.replace(target, '{amountWords}')
                 changed = True
-                
-        # If it spanned multiple runs, fallback to simple string replace (might drop some bolding)
-        if not changed:
-            p.text = p.text.replace('Five Lakhs Eight Three Thousand Two Hundred Rupees Only', '{amountWords}')
-            changed = True
+                break
             
         print(f"Replaced in paragraph. Now: '{p.text}'")
 

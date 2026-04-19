@@ -84,10 +84,13 @@ app.use('/api/export', exportRoutes);
 // Register todo routes
 app.use('/api/todos', todoRoutes);
 
+const startTargetAutomationJob = require('./jobs/targetAutomation');
+
 // Start background cron jobs
 startCronJobs();
 startFollowUpReminderJob(app);
 startTodoReminderJob(app);
+startTargetAutomationJob(app);
 
 // API Routes
 app.use('/api/auth', authRoutes);

@@ -733,8 +733,10 @@ model DailyReport {
 // ============================================
 
 enum TargetPeriodType {
+  WEEKLY
   MONTHLY
   QUARTERLY
+  YEARLY
 }
 
 model SalesTarget {
@@ -753,6 +755,10 @@ model SalesTarget {
   revenueAchieved Decimal          @default(0) @db.Decimal(15, 2)
   leadsAchieved   Int              @default(0)
   quotationsSent  Int              @default(0)
+
+  isRecurring     Boolean          @default(false)
+  reminderAt      DateTime?
+  reminderSent    Boolean          @default(false)
 
   notes           String?          @db.Text
   createdById     String
