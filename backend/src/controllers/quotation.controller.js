@@ -941,6 +941,96 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
+    // ── Scheffler Dish: use native Word template ──
+    if (quotation.templateType === 'SCHEFFLER_DISH') {
+      const PizZip = require('pizzip');
+      const Docxtemplater = require('docxtemplater');
+      const templatePath = path.join(__dirname, '../assets/scheffler_template.docx');
+      let content;
+      try {
+        content = fs.readFileSync(templatePath, 'binary');
+      } catch (err) {
+        return res.status(500).json({ success: false, message: 'scheffler_template.docx not found in assets. Please upload the template with {docxtemplater} tags.' });
+      }
+      const zip = new PizZip(content);
+      const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+      });
+
+      const cf = quotation.customFields || {};
+      
+      const fmt = (val) => Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+      const totalAmt = parseFloat(cf.totalAmt) || 0;
+      
+      const items = (cf.items || []).map((item, idx) => ({
+        sno: idx + 1,
+        desc: item.desc || '',
+        qty: item.qty || '',
+        unit: item.unit || '',
+        rate: Number(item.rate || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+        amount: Number(item.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+      }));
+
+      doc.render({
+        toName: cf.toName || quotation.customer?.contactName || '',
+        qtnDate: cf.qtnDate || '',
+        quotRef: cf.quotRef || '',
+        dishesMealsStatement: cf.dishesMealsStatement || '',
+        subjectLine: cf.subjectLine || '',
+        items: items,
+        totalAmt: totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+        amountWords: cf.amountWords || `Rupees ${numberToWords(totalAmt)} Only`,
+        
+        // Economic Viability Current
+        cylindersPerDay: fmt(cf.cylindersPerDay),
+        costPerCylinder: fmt(cf.costPerCylinder),
+        cylinderCostPerDay: fmt(cf.cylinderCostPerDay),
+        cylinderCostMonthly: fmt(cf.cylinderCostMonthly),
+        cylinderCostAnnually: fmt(cf.cylinderCostAnnually),
+        electricityCostMonthly: fmt(cf.electricityCostMonthly),
+        electricityCostAnnually: fmt(cf.electricityCostAnnually),
+        nonSunnyDaysExpensesCurrent: cf.nonSunnyDaysExpensesCurrent || 'Consider in above calculation',
+        setupCostCurrent: '0',
+        totalCost1YearCurrent: fmt(cf.totalCost1YearCurrent),
+        
+        // Economic Viability Proposed
+        cylindersPerDayProposed: '0',
+        costPerCylinderProposed: '0',
+        cylinderCostPerDayProposed: '0',
+        cylinderCostMonthlyProposed: '0',
+        cylinderCostAnnuallyProposed: '0',
+        electricityCostMonthlyProposed: '0',
+        electricityCostAnnuallyProposed: '0',
+        nonSunnyDaysExpensesProposed: fmt(cf.nonSunnyDaysExpensesProposed),
+        setupCost: fmt(totalAmt),
+        totalCost1YearProposed: fmt(cf.totalCost1YearProposed),
+        roi: cf.roi || '0',
+        
+        // Cost Analysis 10 Years
+        annualMaintenanceCostCurrent: '0',
+        tenYearMaintenanceCostCurrent: '0',
+        totalCost10YearsCurrent: fmt(cf.totalCost10YearsCurrent),
+        
+        annualMaintenanceCost: fmt(cf.annualMaintenanceCost),
+        tenYearMaintenanceCost: fmt(cf.tenYearMaintenanceCost),
+        totalCost10YearsProposed: fmt(cf.totalCost10YearsProposed),
+        savings: fmt(cf.savings),
+
+        // Terms
+        exWorksTerms: cf.exWorksTerms || 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
+        packingTerms: cf.packingTerms || 'Packing 3% Extra, Fright and insurance will be in scope.',
+        paymentTerms1: cf.paymentTerms1 || '70% advance payment upon receipt of the purchase order.',
+        paymentTerms2: cf.paymentTerms2 || '20%+100% taxes payment after the installation of the stand and dish',
+        paymentTerms3: cf.paymentTerms3 || '10% payment after the completion of installation and commissioning.',
+      });
+
+      const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename=Quotation-${quotation.quotationNumber}.docx`);
+      return res.send(buf);
+    }
+
     // ── Standard quotation: fall back to html-to-docx ─────────────────────────
     const html = buildStandardHTML(quotation);
     const htmlToDocx = require('html-to-docx');

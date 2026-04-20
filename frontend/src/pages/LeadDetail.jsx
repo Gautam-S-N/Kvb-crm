@@ -115,6 +115,111 @@ const LeadDetail = () => {
   };
   const [dryerFields, setDryerFields] = useState({ ...DRYER_DEFAULTS });
 
+  // Scheffler Dish custom fields
+  const SCHEFFLER_DEFAULTS = {
+    toName: '',
+    qtnDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+    quotRef: 'QTN.KVB.SSD.003.A.',
+    dishesMealsStatement: '30 dishes can fulfill the Lunch and Dinner requirement for 3000 Meals.',
+    subjectLine: 'Sub: Technical and Commercial Proposal for Scheffler Solar Concentrator',
+    items: [
+      { desc: 'Concentrated Solar Technology Steam Cooking: 16 Sq Mtr Dish, Reflective materials - 3mm high reflective Glass solar grade, Surface Protection - Zinc/Chrome, with dual coat Synthetic Enamel Paints, Reflector Fixing - Screws, Natural cure silicon sealant on Aluminum channel.', qty: 30, unit: 'Nos', rate: 395000, amount: 11850000 },
+      { desc: 'Receivers: Type - Circular, Material - Boiler quality, Size - 450mm Diameter, Design Pressure - 15kg/Sq.cm, Working Pressure - 10kg/cm\u00b2, Insulation Material - 100 kg/m\u00b3 mineral wool with 100mm Insulation and Aluminum cladding.', qty: 30, unit: 'Nos', rate: 140000, amount: 4200000 },
+      { desc: 'Steam Tank: Header tank 200 Ltr capacity, Materials - BQ Plate (IBR Grade), Design Pressure - 15Kg/Sq.cm, Insulation material 100Kg/m\u00b3 mineral wool with 100mm insulation and Aluminum cladding.', qty: 4, unit: 'Nos', rate: 170000, amount: 680000 },
+      { desc: 'Central Tracking System: Type - Automatic, Drive - DC Motor and reduction gearbox, Speed Synchronizer - Cyclic timer.', qty: 1, unit: 'Set', rate: 410000, amount: 410000 },
+      { desc: 'Valves and Controls (IBR Grade): Globe/Ball valves required size, NRV Pressure gauges, Temperature Gauges, safety valves', qty: 1, unit: 'Set', rate: 150000, amount: 150000 },
+      { desc: 'Steam/Feed Water Distribution Pipes: Materials - MS Seamless, connecting receivers to Tank / tank to Vessels, Insulation materials 100kg/m\u00b3 LRB with 50mm insulation and aluminum cladding. Aprox Qty 800 mts', qty: 1, unit: 'Set', rate: 560000, amount: 560000 },
+      { desc: 'Control Panel', qty: 4, unit: 'Set', rate: 25000, amount: 100000 },
+      { desc: 'Installation and Commissioning', qty: 30, unit: 'Nos', rate: 25000, amount: 750000 },
+      { desc: 'Transportation etc.', qty: 1, unit: 'LS', rate: 0, amount: 0 }
+    ],
+    totalAmt: 18700000,
+    fuelType: 'Both', // Cylinder, Electricity, Both
+    cylindersPerDay: 6,
+    costPerCylinder: 1800,
+    electricityCostMonthly: 53400,
+    nonSunnyDaysExpensesProposed: 1188000,
+    annualMaintenanceCost: 200000,
+    
+    exWorksTerms: 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
+    packingTerms: 'Packing 3% Extra, Fright and insurance will be in scope.',
+    paymentTerms1: '70% advance payment upon receipt of the purchase order.',
+    paymentTerms2: '20%+100% taxes payment after the installation of the stand and dish',
+    paymentTerms3: '10% payment after the completion of installation and commissioning.',
+    gstRate: 18,
+  };
+  const [schefflerFields, setSchefflerFields] = useState({ ...SCHEFFLER_DEFAULTS });
+
+  const addSchefflerItem = () => setSchefflerFields(prev => ({...prev, items: [...prev.items, {desc:'', qty:1, unit:'Nos', rate:0, amount:0}]}));
+  const removeSchefflerItem = (idx) => {
+    setSchefflerFields(prev => {
+      const newItems = prev.items.filter((_, i) => i !== idx);
+      const totalAmt = newItems.reduce((acc, it) => acc + (parseFloat(it.amount)||0), 0);
+      return {...prev, items: newItems, totalAmt};
+    });
+  };
+  const updateSchefflerItem = (idx, field, val) => {
+    setSchefflerFields(prev => {
+       const newItems = [...prev.items];
+       newItems[idx][field] = val;
+       if (field === 'qty' || field === 'rate') {
+          newItems[idx].amount = (parseFloat(newItems[idx].qty)||0) * (parseFloat(newItems[idx].rate)||0);
+       }
+       const totalAmt = newItems.reduce((acc, it) => acc + (parseFloat(it.amount)||0), 0);
+       return {...prev, items: newItems, totalAmt};
+    });
+  };
+
+  const calcSchefflerROI = () => {
+    let { 
+      fuelType, cylindersPerDay, costPerCylinder, electricityCostMonthly, totalAmt, 
+      nonSunnyDaysExpensesProposed, annualMaintenanceCost 
+    } = schefflerFields;
+    
+    totalAmt = parseFloat(totalAmt) || 0;
+    cylindersPerDay = parseFloat(cylindersPerDay) || 0;
+    costPerCylinder = parseFloat(costPerCylinder) || 0;
+    electricityCostMonthly = parseFloat(electricityCostMonthly) || 0;
+    nonSunnyDaysExpensesProposed = parseFloat(nonSunnyDaysExpensesProposed) || 0;
+    annualMaintenanceCost = parseFloat(annualMaintenanceCost) || 0;
+
+    // Cylinder Calc
+    let cylinderCostPerDayOrig = cylindersPerDay * costPerCylinder;
+    let cylinderCostPerDay = (fuelType === 'Cylinder' || fuelType === 'Both') ? cylinderCostPerDayOrig : 0;
+    let cylinderCostMonthly = cylinderCostPerDay * 30;
+    let cylinderCostAnnually = cylinderCostMonthly * 12;
+
+    // Electricity Calc
+    let electricityCostMonthlyDerived = (fuelType === 'Electricity' || fuelType === 'Both') ? electricityCostMonthly : 0;
+    let electricityCostAnnually = electricityCostMonthlyDerived * 12;
+
+    // Current Situation Totals
+    let totalCost1YearCurrent = cylinderCostAnnually + electricityCostAnnually;
+    let totalCost10YearsCurrent = totalCost1YearCurrent * 10;
+
+    // Proposed Situation Totals
+    let totalCost1YearProposed = totalAmt + nonSunnyDaysExpensesProposed;
+    let tenYearMaintenanceCost = annualMaintenanceCost * 10;
+    let totalCost10YearsProposed = totalAmt + nonSunnyDaysExpensesProposed + tenYearMaintenanceCost;
+
+    let savings = totalCost10YearsCurrent - totalCost10YearsProposed;
+
+    let dailySavings = (cylinderCostPerDayOrig) + (electricityCostMonthly / 30);
+    // Real Savings
+    let roiYears = 0;
+    if (savings > 0) {
+      let annualRealSavings = savings / 10;
+      roiYears = (totalCost1YearProposed / annualRealSavings).toFixed(2);
+    }
+    
+    return {
+      cylinderCostPerDay, cylinderCostMonthly, cylinderCostAnnually,
+      electricityCostAnnually, totalCost1YearCurrent, totalCost10YearsCurrent,
+      totalCost1YearProposed, tenYearMaintenanceCost, totalCost10YearsProposed, savings,
+      roiYears, dailySavings, annualSavings: dailySavings * 300
+    };
+  };
+
   useEffect(() => {
     getLead(id);
     fetchUsers();
@@ -238,6 +343,34 @@ const LeadDetail = () => {
         notes: '',
         discountPercent: 0,
       };
+    } else if (quotTemplateType === 'SCHEFFLER_DISH') {
+      const placeholderProduct = products.find(p => p.isActive);
+      const syntheticItems = placeholderProduct ? [{
+        productId: placeholderProduct.id,
+        description: 'Scheffler Dish Project',
+        quantity: 1,
+        unitPrice: schefflerFields.totalAmt,
+        discount: 0,
+        taxRate: schefflerFields.gstRate || 18,
+      }] : [];
+
+      const econ = calcSchefflerROI();
+      payload = {
+        leadId: id,
+        templateType: 'SCHEFFLER_DISH',
+        customFields: {
+          ...schefflerFields,
+          toName: schefflerFields.toName || currentLead?.customer?.contactName,
+          totalAmt: schefflerFields.totalAmt,
+          gstRate: schefflerFields.gstRate || 18,
+          ...econ
+        },
+        items: syntheticItems,
+        paymentTerms: schefflerFields.paymentTerms,
+        deliveryTerms: '',
+        notes: '',
+        discountPercent: 0,
+      };
     } else {
       // STANDARD template
       const validItems = quotItems.filter(it => it.productId && it.unitPrice);
@@ -271,6 +404,7 @@ const LeadDetail = () => {
       setQuotMeta({ validUntil: '', paymentTerms: '', deliveryTerms: '', notes: '', discountPercent: 0 });
       setQuotTemplateType('STANDARD');
       setDryerFields({ ...DRYER_DEFAULTS });
+      setSchefflerFields({ ...SCHEFFLER_DEFAULTS });
     } else {
       alert(res.error || 'Failed to create quotation');
     }
@@ -846,7 +980,7 @@ const LeadDetail = () => {
                           >
                             <option value="STANDARD">Standard Quotation</option>
                             <option value="SOLAR_TUNNEL_DRYER">Solar Tunnel Dryer</option>
-                            {/* Add new product templates here — they auto-appear in the dropdown */}
+                            <option value="SCHEFFLER_DISH">Scheffler Dish</option>
                           </select>
                         </div>
 
@@ -1153,6 +1287,212 @@ const LeadDetail = () => {
                                 <div className="text-xs text-gray-500 mt-0.5">GST @ {dryerFields.gstRate}% — Included</div>
                               </div>
                             )}
+                          </div>
+                        )}
+
+                        {/* ═══════════════════════════════════════════ */}
+                        {/* SCHEFFLER DISH template — custom fields */}
+                        {/* ═══════════════════════════════════════════ */}
+                        {quotTemplateType === 'SCHEFFLER_DISH' && (
+                          <div className="space-y-4">
+                            <div className="bg-sky-50 border border-sky-200 rounded-lg px-3 py-2 text-xs text-sky-800 font-medium">
+                              📋 Fields for Scheffler Dish. This will generate a dynamic DOCX with Cost Breakdown and ROI Calculator.
+                            </div>
+
+                            {/* Row 1: To / Date / Ref */}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">To (Customer Name)</label>
+                                <input value={schefflerFields.toName}
+                                  onChange={e => setSchefflerFields({ ...schefflerFields, toName: e.target.value })}
+                                  placeholder={currentLead?.customer?.contactName || 'Mr. / Ms. ...'}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-sky-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Date</label>
+                                <input value={schefflerFields.qtnDate}
+                                  onChange={e => setSchefflerFields({ ...schefflerFields, qtnDate: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-sky-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Quotation Ref No.</label>
+                                <input value={schefflerFields.quotRef}
+                                  onChange={e => setSchefflerFields({ ...schefflerFields, quotRef: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-sky-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Dishes/Meals Statement */}
+                            <div>
+                               <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Productivity Statement (Editable)</label>
+                               <textarea
+                                 value={schefflerFields.dishesMealsStatement}
+                                 onChange={e => setSchefflerFields({ ...schefflerFields, dishesMealsStatement: e.target.value })}
+                                 rows={2}
+                                 className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-sky-400 bg-white resize-none"
+                               />
+                            </div>
+
+                            {/* Cost Breakdown Section */}
+                            <div className="border border-sky-200 rounded-xl p-3 bg-white">
+                              <div className="flex justify-between items-center mb-2">
+                                <label className="text-xs font-bold text-violet-900 block">6.1 Cost Breakdown (Items)</label>
+                                <button type="button" onClick={addSchefflerItem}
+                                  className="text-xs px-2 py-1 bg-sky-100 text-sky-700 hover:bg-sky-200 font-semibold rounded-lg">
+                                  + Add Item Row
+                                </button>
+                              </div>
+                              <div className="space-y-2">
+                                {/* Header Labels */}
+                                <div className="flex gap-2 text-[10px] font-bold text-gray-500 px-2 uppercase tracking-wider">
+                                   <div className="flex-1">Description</div>
+                                   <div className="w-16">Qty</div>
+                                   <div className="w-20">UOM</div>
+                                   <div className="w-24">Unit Rate</div>
+                                   <div className="w-28 text-right">Total</div>
+                                   <div className="w-8"></div>
+                                </div>
+                                {schefflerFields.items.map((item, idx) => (
+                                  <div key={idx} className="flex gap-2 items-start bg-gray-50 p-2 rounded-lg border border-gray-100 group hover:border-sky-300 transition-colors">
+                                    <div className="flex-1">
+                                      <textarea value={item.desc} placeholder="Item description"
+                                        rows={2}
+                                        onChange={e => updateSchefflerItem(idx, 'desc', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm resize-none focus:ring-1 focus:ring-sky-400 outline-none" />
+                                    </div>
+                                    <div className="w-16">
+                                      <input type="number" value={item.qty} placeholder="Qty"
+                                        onChange={e => updateSchefflerItem(idx, 'qty', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm text-center focus:ring-1 focus:ring-sky-400 outline-none" />
+                                    </div>
+                                    <div className="w-20">
+                                      <input value={item.unit} placeholder="Unit"
+                                        onChange={e => updateSchefflerItem(idx, 'unit', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm text-center focus:ring-1 focus:ring-sky-400 outline-none" />
+                                    </div>
+                                    <div className="w-24">
+                                      <input type="number" value={item.rate} placeholder="Rate"
+                                        onChange={e => updateSchefflerItem(idx, 'rate', e.target.value)}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm text-right focus:ring-1 focus:ring-sky-400 outline-none" />
+                                    </div>
+                                    <div className="w-28 font-semibold text-right bg-white p-1.5 border border-gray-200 rounded text-sm">
+                                      ₹{Number(item.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                    </div>
+                                    <button type="button" onClick={() => removeSchefflerItem(idx)}
+                                      className="p-1.5 text-gray-300 hover:text-red-500 rounded transition-colors opacity-0 group-hover:opacity-100">
+                                      <X size={14} />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-4 flex justify-between items-center font-bold text-violet-900 border-t-2 border-sky-100 pt-3">
+                                <span className="text-sm">Consolidated Project Total</span>
+                                <span className="text-xl text-sky-700">₹{Number(schefflerFields.totalAmt).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                              </div>
+                            </div>
+
+                            {/* ROI Section */}
+                            <div className="border border-sky-200 rounded-xl p-3 bg-white">
+                              <label className="text-xs font-bold text-violet-900 block mb-2">Economic Viability &amp; ROI Calc</label>
+                              
+                              <div className="mb-3 flex gap-2">
+                                {['Cylinder', 'Electricity', 'Both'].map(t => (
+                                  <label key={t} className={`flex-1 text-center py-1.5 border rounded cursor-pointer text-xs font-bold transition-colors ${schefflerFields.fuelType === t ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}>
+                                    <input type="radio" name="fuelType" className="hidden"
+                                      checked={schefflerFields.fuelType === t}
+                                      onChange={() => setSchefflerFields({ ...schefflerFields, fuelType: t })} />
+                                    {t}
+                                  </label>
+                                ))}
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3 mb-3">
+                                {(schefflerFields.fuelType === 'Cylinder' || schefflerFields.fuelType === 'Both') && (
+                                  <>
+                                    <div>
+                                      <label className="text-[10px] font-bold text-gray-700 block mb-0.5">Cylinders per Day</label>
+                                      <input type="number" value={schefflerFields.cylindersPerDay}
+                                        onChange={e => setSchefflerFields({ ...schefflerFields, cylindersPerDay: e.target.value })}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm" />
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] font-bold text-gray-700 block mb-0.5">Cost per Cylinder (₹)</label>
+                                      <input type="number" value={schefflerFields.costPerCylinder}
+                                        onChange={e => setSchefflerFields({ ...schefflerFields, costPerCylinder: e.target.value })}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm" />
+                                    </div>
+                                  </>
+                                )}
+                                {(schefflerFields.fuelType === 'Electricity' || schefflerFields.fuelType === 'Both') && (
+                                  <div className="col-span-2">
+                                    <label className="text-[10px] font-bold text-gray-700 block mb-0.5">Electrical Cost Monthly (₹)</label>
+                                    <input type="number" value={schefflerFields.electricityCostMonthly}
+                                      onChange={e => setSchefflerFields({ ...schefflerFields, electricityCostMonthly: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm" />
+                                  </div>
+                                )}
+                                <div>
+                                  <label className="text-[10px] font-bold text-red-900 block mb-0.5">Non-Sunny Days Expenses / Yr (₹)</label>
+                                  <input type="number" value={schefflerFields.nonSunnyDaysExpensesProposed}
+                                    onChange={e => setSchefflerFields({ ...schefflerFields, nonSunnyDaysExpensesProposed: e.target.value })}
+                                    className="w-full p-1.5 border border-red-200 rounded text-sm bg-red-50" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-red-900 block mb-0.5">Annual Maintenance (₹)</label>
+                                  <input type="number" value={schefflerFields.annualMaintenanceCost}
+                                    onChange={e => setSchefflerFields({ ...schefflerFields, annualMaintenanceCost: e.target.value })}
+                                    className="w-full p-1.5 border border-red-200 rounded text-sm bg-red-50" />
+                                </div>
+                              </div>
+                              
+                              <div className="bg-sky-50 p-2 rounded border border-sky-100 flex justify-between items-center transition-all">
+                                <div className="text-[10px] text-sky-800 font-medium">
+                                  <strong>10-Year Totals Preview:</strong><br/>
+                                  Current: ₹{(calcSchefflerROI().totalCost10YearsCurrent).toLocaleString('en-IN')}<br/>
+                                  Proposed: ₹{(calcSchefflerROI().totalCost10YearsProposed).toLocaleString('en-IN')}
+                                </div>
+                                <div className="text-right">
+                                  <div className="text-[10px] font-bold text-sky-600 uppercase">10-Yr Savings</div>
+                                  <div className="text-lg font-bold text-green-700">₹{(calcSchefflerROI().savings).toLocaleString('en-IN')}</div>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="border border-indigo-200 rounded-xl p-3 bg-white mt-4">
+                              <label className="text-xs font-bold text-violet-900 block mb-2">Terms & Condition (Editable)</label>
+                              
+                              <div className="space-y-2">
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Ex Works Terms</label>
+                                  <textarea rows={1} value={schefflerFields.exWorksTerms} onChange={e => setSchefflerFields({ ...schefflerFields, exWorksTerms: e.target.value })} className="w-full p-1.5 border border-gray-200 rounded text-[10px] resize-none" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Packing Terms</label>
+                                  <textarea rows={1} value={schefflerFields.packingTerms} onChange={e => setSchefflerFields({ ...schefflerFields, packingTerms: e.target.value })} className="w-full p-1.5 border border-gray-200 rounded text-[10px] resize-none" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Payment Term 1 (Advance)</label>
+                                  <textarea rows={1} value={schefflerFields.paymentTerms1} onChange={e => setSchefflerFields({ ...schefflerFields, paymentTerms1: e.target.value })} className="w-full p-1.5 border border-gray-200 rounded text-[10px] resize-none" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Payment Term 2 (Installation)</label>
+                                  <textarea rows={1} value={schefflerFields.paymentTerms2} onChange={e => setSchefflerFields({ ...schefflerFields, paymentTerms2: e.target.value })} className="w-full p-1.5 border border-gray-200 rounded text-[10px] resize-none" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Payment Term 3 (Completion / Dispatch)</label>
+                                  <textarea rows={1} value={schefflerFields.paymentTerms3} onChange={e => setSchefflerFields({ ...schefflerFields, paymentTerms3: e.target.value })} className="w-full p-1.5 border border-gray-200 rounded text-[10px] resize-none" />
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <hr className="border-gray-100 my-4" />
+                            <div className="mb-4">
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">GST Rate (%)</label>
+                                <input type="number" value={schefflerFields.gstRate}
+                                  onChange={e => setSchefflerFields({ ...schefflerFields, gstRate: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm w-32" />
+                            </div>
+
                           </div>
                         )}
 

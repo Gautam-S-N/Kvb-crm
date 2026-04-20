@@ -1,10 +1,11 @@
 /**
  * Converts a number to words in Indian Numbering System (Lakhs, Crores)
+ * Supports decimals (Paisa)
  * @param {number} num 
  * @returns {string}
  */
 const numberToWords = (num) => {
-  if (num === 0) return 'Zero';
+  if (num === 0) return 'Zero Rupees Only';
   if (isNaN(num)) return '';
 
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
@@ -19,7 +20,15 @@ const numberToWords = (num) => {
     return inWords(Math.floor(n / 10000000)) + ' Crore' + (n % 10000000 ? ' ' + inWords(n % 10000000) : '');
   };
 
-  return inWords(Math.round(num)) + ' Rupees Only';
+  const mainPart = Math.floor(num);
+  const paisaPart = Math.round((num - mainPart) * 100);
+
+  let result = inWords(mainPart) + ' Rupees';
+  if (paisaPart > 0) {
+    result += ' and ' + inWords(paisaPart) + ' Paisa';
+  }
+  
+  return result + ' Only';
 };
 
 module.exports = { numberToWords };
