@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useAuthStore } from '../stores/authStore';
 import { useDashboardStore } from '../stores/dashboardStore';
+import { useTodoStore } from '../stores/todoStore';
 import { useSocket } from '../hooks/useSocket';
 import {
   Users, ShoppingCart, CheckSquare, TrendingUp,
@@ -40,11 +41,13 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated } = useAuthStore();
   const { metrics, isLoading, fetchMetrics } = useDashboardStore();
+  const { todos, fetchTodos } = useTodoStore();
   const { subscribeToNotifications, unsubscribeFromNotifications } = useSocket();
 
   useEffect(() => {
     if (!isAuthenticated) { navigate('/login'); return; }
     fetchMetrics();
+    fetchTodos();
 
     subscribeToNotifications((data) => {
       if (['LEAD_STATUS_CHANGED', 'LEAD_ASSIGNED', 'PAYMENT_RECEIVED'].includes(data.type)) fetchMetrics();
@@ -58,6 +61,8 @@ const Dashboard = () => {
   const S  = metrics.sales || {};
   const T  = metrics.tasks || {};
   const chartData = metrics.chartData || [];
+
+  const myPendingTodos = todos.filter(t => t.status !== 'COMPLETED').length;
 
   const handleExport = (type) => {
     const token = localStorage.getItem('token');
@@ -108,7 +113,7 @@ const Dashboard = () => {
         {user?.role === 'ADMIN' && (
           <>
             <KPICard label="Inventory Value" value={isLoading ? '…' : fmtMoney(metrics.inventory?.totalValue)} sub={`${metrics.inventory?.totalMaterials ?? 0} items`} icon={Package} color="bg-indigo-500" onClick={() => navigate('/inventory')} />
-            <KPICard label="Low Stock" value={isLoading ? '…' : metrics.inventory?.lowStockCount ?? 0} sub="Requires attention" icon={AlertTriangle} color="bg-rose-500" onClick={() => navigate('/inventory')} />
+            <KPICard label="Pending To-Dos" value={isLoading ? '…' : myPendingTodos} sub="In personal to-do list" icon={CheckSquare} color="bg-rose-500" onClick={() => navigate('/todos')} />
           </>
         )}
       </div>

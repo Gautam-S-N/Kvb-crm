@@ -946,80 +946,119 @@ exports.generateDOCX = async (req, res) => {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
       const templatePath = path.join(__dirname, '../assets/scheffler_template.docx');
-      let content;
+      let rawContent;
       try {
-        content = fs.readFileSync(templatePath, 'binary');
+        rawContent = fs.readFileSync(templatePath, 'binary');
       } catch (err) {
-        return res.status(500).json({ success: false, message: 'scheffler_template.docx not found in assets. Please upload the template with {docxtemplater} tags.' });
+        return res.status(500).json({ success: false, message: 'scheffler_template.docx not found in assets.' });
       }
-      const zip = new PizZip(content);
-      const doc = new Docxtemplater(zip, {
-        paragraphLoop: true,
-        linebreaks: true,
-      });
 
       const cf = quotation.customFields || {};
-      
+      const fuelType = cf.fuelType || 'Both';
+      const showCylinder    = fuelType === 'Cylinder' || fuelType === 'Both';
+      const showElectricity = fuelType === 'Electricity' || fuelType === 'Both';
+
+      // Pre-process: strip unwanted table rows from raw document.xml BEFORE docxtemplater.
+      // {#tag} conditionals do NOT work inside <w:tc> table-cell scope in docxtemplater,
+      // so we remove the rows directly from the XML string instead.
+      const zip = new PizZip(rawContent);
+      let docXml = zip.file('word/document.xml').asText();
+
+      const cylinderTags = [
+        '{cylindersPerDay}', '{costPerCylinder}', '{cylinderCostPerDay}',
+        '{cylinderCostMonthly}', '{cylinderCostAnnually}',
+        '{cylindersPerDayProposed}', '{costPerCylinderProposed}',
+        '{cylinderCostPerDayProposed}', '{cylinderCostMonthlyProposed}',
+        '{cylinderCostAnnuallyProposed}',
+      ];
+      const electricityTags = [
+        '{electricityCostMonthly}', '{electricityCostAnnually}',
+        '{electricityCostMonthlyProposed}', '{electricityCostAnnuallyProposed}',
+      ];
+
+      // Remove every <w:tr>...</w:tr> that contains any of the given tag strings
+      const removeRowsContaining = (xml, tags) => {
+        let result = xml;
+        for (const tag of tags) {
+          let safety = 0;
+          while (result.includes(tag) && safety++ < 20) {
+            const tagIdx   = result.indexOf(tag);
+            if (tagIdx < 0) break;
+            const rowStart = result.lastIndexOf('<w:tr ', tagIdx);
+            const rowEnd   = result.indexOf('</w:tr>', tagIdx) + '</w:tr>'.length;
+            if (rowStart < 0 || rowEnd < '</w:tr>'.length) break;
+            result = result.slice(0, rowStart) + result.slice(rowEnd);
+          }
+        }
+        return result;
+      };
+
+      if (!showCylinder)    docXml = removeRowsContaining(docXml, cylinderTags);
+      if (!showElectricity) docXml = removeRowsContaining(docXml, electricityTags);
+
+      zip.file('word/document.xml', docXml);
+
+      const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
       const fmt = (val) => Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
       const totalAmt = parseFloat(cf.totalAmt) || 0;
-      
+
       const items = (cf.items || []).map((item, idx) => ({
         sno: idx + 1,
         desc: item.desc || '',
         qty: item.qty || '',
         unit: item.unit || '',
-        rate: Number(item.rate || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+        rate:   Number(item.rate   || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
         amount: Number(item.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
       }));
 
       doc.render({
-        toName: cf.toName || quotation.customer?.contactName || '',
-        qtnDate: cf.qtnDate || '',
-        quotRef: cf.quotRef || '',
+        toName:               cf.toName || quotation.customer?.contactName || '',
+        qtnDate:              cf.qtnDate || '',
+        quotRef:              cf.quotRef || '',
         dishesMealsStatement: cf.dishesMealsStatement || '',
-        subjectLine: cf.subjectLine || '',
-        items: items,
-        totalAmt: totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
-        amountWords: cf.amountWords || `Rupees ${numberToWords(totalAmt)} Only`,
-        
-        // Economic Viability Current
-        cylindersPerDay: fmt(cf.cylindersPerDay),
-        costPerCylinder: fmt(cf.costPerCylinder),
-        cylinderCostPerDay: fmt(cf.cylinderCostPerDay),
-        cylinderCostMonthly: fmt(cf.cylinderCostMonthly),
-        cylinderCostAnnually: fmt(cf.cylinderCostAnnually),
-        electricityCostMonthly: fmt(cf.electricityCostMonthly),
-        electricityCostAnnually: fmt(cf.electricityCostAnnually),
-        nonSunnyDaysExpensesCurrent: cf.nonSunnyDaysExpensesCurrent || 'Consider in above calculation',
-        setupCostCurrent: '0',
-        totalCost1YearCurrent: fmt(cf.totalCost1YearCurrent),
-        
-        // Economic Viability Proposed
-        cylindersPerDayProposed: '0',
-        costPerCylinderProposed: '0',
-        cylinderCostPerDayProposed: '0',
-        cylinderCostMonthlyProposed: '0',
-        cylinderCostAnnuallyProposed: '0',
-        electricityCostMonthlyProposed: '0',
-        electricityCostAnnuallyProposed: '0',
-        nonSunnyDaysExpensesProposed: fmt(cf.nonSunnyDaysExpensesProposed),
-        setupCost: fmt(totalAmt),
-        totalCost1YearProposed: fmt(cf.totalCost1YearProposed),
-        roi: cf.roi || '0',
-        
-        // Cost Analysis 10 Years
-        annualMaintenanceCostCurrent: '0',
-        tenYearMaintenanceCostCurrent: '0',
-        totalCost10YearsCurrent: fmt(cf.totalCost10YearsCurrent),
-        
-        annualMaintenanceCost: fmt(cf.annualMaintenanceCost),
-        tenYearMaintenanceCost: fmt(cf.tenYearMaintenanceCost),
-        totalCost10YearsProposed: fmt(cf.totalCost10YearsProposed),
-        savings: fmt(cf.savings),
+        subjectLine:          cf.subjectLine || '',
+        items,
+        totalAmt:    totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+        amountWords: cf.amountWords || ('Rupees ' + numberToWords(totalAmt) + ' Only'),
+
+        // Economic Viability – Current
+        cylindersPerDay:              fmt(cf.cylindersPerDay),
+        costPerCylinder:              fmt(cf.costPerCylinder),
+        cylinderCostPerDay:           fmt(cf.cylinderCostPerDay),
+        cylinderCostMonthly:          fmt(cf.cylinderCostMonthly),
+        cylinderCostAnnually:         fmt(cf.cylinderCostAnnually),
+        electricityCostMonthly:       fmt(cf.electricityCostMonthly),
+        electricityCostAnnually:      fmt(cf.electricityCostAnnually),
+        nonSunnyDaysExpensesCurrent:  cf.nonSunnyDaysExpensesCurrent || 'Consider in above calculation',
+        setupCostCurrent:             '0',
+        totalCost1YearCurrent:        fmt(cf.totalCost1YearCurrent),
+
+        // Economic Viability – Proposed
+        cylindersPerDayProposed:             '0',
+        costPerCylinderProposed:             '0',
+        cylinderCostPerDayProposed:          '0',
+        cylinderCostMonthlyProposed:         '0',
+        cylinderCostAnnuallyProposed:        '0',
+        electricityCostMonthlyProposed:      '0',
+        electricityCostAnnuallyProposed:     '0',
+        nonSunnyDaysExpensesProposed:        fmt(cf.nonSunnyDaysExpensesProposed),
+        setupCost:                           fmt(totalAmt),
+        totalCost1YearProposed:              fmt(cf.totalCost1YearProposed),
+        roi:                                 cf.roi || '0',
+
+        // Cost Analysis – 10 Years
+        annualMaintenanceCostCurrent:   '0',
+        tenYearMaintenanceCostCurrent:  '0',
+        totalCost10YearsCurrent:        fmt(cf.totalCost10YearsCurrent),
+        annualMaintenanceCost:          fmt(cf.annualMaintenanceCost),
+        tenYearMaintenanceCost:         fmt(cf.tenYearMaintenanceCost),
+        totalCost10YearsProposed:       fmt(cf.totalCost10YearsProposed),
+        savings:                        fmt(cf.savings),
 
         // Terms
-        exWorksTerms: cf.exWorksTerms || 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
-        packingTerms: cf.packingTerms || 'Packing 3% Extra, Fright and insurance will be in scope.',
+        exWorksTerms:  cf.exWorksTerms  || 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
+        packingTerms:  cf.packingTerms  || 'Packing 3% Extra, Fright and insurance will be in scope.',
         paymentTerms1: cf.paymentTerms1 || '70% advance payment upon receipt of the purchase order.',
         paymentTerms2: cf.paymentTerms2 || '20%+100% taxes payment after the installation of the stand and dish',
         paymentTerms3: cf.paymentTerms3 || '10% payment after the completion of installation and commissioning.',
@@ -1030,6 +1069,7 @@ exports.generateDOCX = async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename=Quotation-${quotation.quotationNumber}.docx`);
       return res.send(buf);
     }
+
 
     // ── Standard quotation: fall back to html-to-docx ─────────────────────────
     const html = buildStandardHTML(quotation);

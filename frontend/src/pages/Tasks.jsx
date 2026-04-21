@@ -39,6 +39,8 @@ export default function Tasks() {
 
   const [search, setSearch]         = useState('');
   const [statusFilter, setStatus]   = useState('');
+  const [employeeFilter, setEmployeeFilter] = useState('');
+  const [sortByEmployee, setSortByEmployee] = useState('');
 
   // Assign modal
   const [showAssign, setShowAssign] = useState(false);
@@ -151,6 +153,19 @@ export default function Tasks() {
               <option key={s} value={s}>{s.replace('_',' ')}</option>
             )}
           </select>
+          <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
+            <option value="">All Employees</option>
+            {[...employees].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
+              <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+            ))}
+          </select>
+          <select value={sortByEmployee} onChange={e => setSortByEmployee(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
+            <option value="">Sort By</option>
+            <option value="asc">Employee (A-Z)</option>
+            <option value="desc">Employee (Z-A)</option>
+          </select>
           <button type="submit"
             className="px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white text-sm rounded-lg font-medium transition-colors flex items-center gap-2">
             <Filter size={14} /> Filter
@@ -159,18 +174,27 @@ export default function Tasks() {
       </div>
 
       {/* Task Cards */}
-      {isLoading ? (
+      {(() => {
+        let displayedTasks = tasks;
+        if (employeeFilter) displayedTasks = displayedTasks.filter(t => t.assignedToId === employeeFilter);
+        if (sortByEmployee === 'asc') {
+          displayedTasks = [...displayedTasks].sort((a,b) => (a.assignedTo?.firstName || '').localeCompare(b.assignedTo?.firstName || ''));
+        } else if (sortByEmployee === 'desc') {
+          displayedTasks = [...displayedTasks].sort((a,b) => (b.assignedTo?.firstName || '').localeCompare(a.assignedTo?.firstName || ''));
+        }
+
+        return isLoading ? (
         <div className="flex justify-center p-12">
           <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full" />
         </div>
-      ) : tasks.length === 0 ? (
+      ) : displayedTasks.length === 0 ? (
         <div className="text-center p-16 bg-white rounded-xl border border-gray-100">
           <CheckSquare size={40} className="mx-auto mb-3 opacity-20 text-gray-500" />
           <p className="text-gray-500">No tasks found</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {tasks.map(task => {
+          {displayedTasks.map(task => {
             const isAssignee = task.assignedToId === user?.id;
             const canAct     = isAdmin || isAssignee;
             const isPending  = task.status !== 'COMPLETED' && task.status !== 'CANCELLED';
@@ -273,7 +297,7 @@ export default function Tasks() {
             );
           })}
         </div>
-      )}
+      ); })()}
 
       {/* ── ASSIGN MODAL ── */}
       {showAssign && (

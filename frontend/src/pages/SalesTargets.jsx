@@ -12,6 +12,8 @@ export default function SalesTargets() {
   const { targets, isLoading, fetchTargets, createTarget, refreshAttainment } = useTargetStore();
   
   const [employees, setEmployees] = useState([]);
+  const [employeeFilter, setEmployeeFilter] = useState('');
+  const [sortByEmployee, setSortByEmployee] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [formData, setFormData] = useState({
     employeeId: '',
@@ -70,8 +72,30 @@ export default function SalesTargets() {
         </div>
       </div>
 
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-5 flex gap-3 flex-wrap">
+        <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
+          <option value="">All Employees</option>
+          {[...employees].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
+            <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+          ))}
+        </select>
+        <select value={sortByEmployee} onChange={e => setSortByEmployee(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
+          <option value="">Sort By</option>
+          <option value="asc">Employee (A-Z)</option>
+          <option value="desc">Employee (Z-A)</option>
+        </select>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {targets.map(t => {
+        {(() => {
+          let displayedTargets = targets;
+          if (employeeFilter) displayedTargets = displayedTargets.filter(t => t.employeeId === employeeFilter);
+          if (sortByEmployee === 'asc') {
+            displayedTargets = [...displayedTargets].sort((a,b) => (a.employee?.firstName || '').localeCompare(b.employee?.firstName || ''));
+          } else if (sortByEmployee === 'desc') {
+            displayedTargets = [...displayedTargets].sort((a,b) => (b.employee?.firstName || '').localeCompare(a.employee?.firstName || ''));
+          }
+          return displayedTargets.map(t => {
           const pct = Math.min(100, ((t.revenueAchieved / t.revenueTarget) * 100));
           const isWinner = pct >= 100;
           const employee = t.employee || { firstName: '?', lastName: '' };
@@ -120,7 +144,7 @@ export default function SalesTargets() {
               </div>
             </div>
           );
-        })}
+        }); })()}
       </div>
 
       {showModal && (
