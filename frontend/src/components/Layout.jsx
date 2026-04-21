@@ -32,7 +32,7 @@ const navItems = [
   { to: '/leads', icon: Users, label: 'Leads', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/quotations', icon: Receipt, label: 'Quotations', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/sales', icon: ShoppingCart, label: 'Sales', roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/products', icon: Package, label: 'Products', roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/products', icon: Package, label: 'Products', roles: ['ADMIN'] },
   { to: '/purchase', icon: Truck, label: 'Purchase', roles: ['ADMIN'] },
   { to: '/inventory', icon: Package, label: 'Inventory', roles: ['ADMIN'] },
   { to: '/tasks', icon: CheckSquare, label: 'Tasks', roles: ['ADMIN', 'EMPLOYEE'] },
@@ -40,7 +40,7 @@ const navItems = [
   { to: '/targets', icon: Target, label: 'Sales Targets', roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/settings',          icon: Settings,        label: 'Settings',             roles: ['ADMIN'] },
   { to: '/users',             icon: UserCog,         label: 'User Management',      roles: ['ADMIN'] },
-  { to: '/todo-list',          icon: ClipboardList,   label: 'My To-Do List',         roles: ['ADMIN'] },
+  { to: '/todo-list',          icon: ClipboardList,   label: 'My To-Do List',         roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/employee-tracking',  icon: UserCheck,        label: 'Employee Tracking',     roles: ['ADMIN'] },
 ];
 

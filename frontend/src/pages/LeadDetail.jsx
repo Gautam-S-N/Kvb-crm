@@ -9,6 +9,7 @@ import { useProductStore } from '../stores/productStore';
 import { useAuthStore } from '../stores/authStore';
 import VoiceRecorder from '../components/VoiceRecorder/VoiceRecorder';
 import DOMPurify from 'dompurify';
+import { numberToWords } from '../utils/numberToWords';
 import {
   PhoneCall, MessageCircle, Mail, FileText, PackagePlus, Clock,
   Plus, Trash2, Download, ChevronDown, X, Search, CheckCircle2,
@@ -42,6 +43,15 @@ const getDotColor = (action = '') => {
 };
 
 const EMPTY_QUOTATION_ITEM = () => ({ productId: '', description: '', quantity: 1, unitPrice: '', discount: 0, taxRate: 18 });
+
+/** Recalculates totalAmt (Lakhs string) and amountWords from 5 item amounts */
+const calcParabolicTotals = (fields) => {
+  const sum = [1, 2, 3, 4, 5].reduce((acc, n) => acc + (parseFloat(fields[`item${n}_amt`]) || 0), 0);
+  const totalAmtStr = sum.toFixed(2);
+  const totalRupees = Math.round(sum * 100000); // Lakhs → Rupees
+  const words = numberToWords(totalRupees);
+  return { totalAmt: totalAmtStr, amountWords: words };
+};
 
 const LeadDetail = () => {
   const { id } = useParams();
@@ -87,7 +97,7 @@ const LeadDetail = () => {
   const [quotItems, setQuotItems] = useState([EMPTY_QUOTATION_ITEM()]);
   const [quotMeta, setQuotMeta] = useState({ validUntil: '', paymentTerms: '', deliveryTerms: '', notes: '', discountPercent: 0 });
   const [quotSubmitting, setQuotSubmitting] = useState(false);
-  const [quotTemplateType, setQuotTemplateType] = useState('STANDARD');
+  const [quotTemplateType, setQuotTemplateType] = useState('SOLAR_PARABOLIC_TROUGH');
 
   // Solar Tunnel Dryer custom fields — pre-filled with docx defaults
   const DRYER_DEFAULTS = {
@@ -115,7 +125,61 @@ const LeadDetail = () => {
   };
   const [dryerFields, setDryerFields] = useState({ ...DRYER_DEFAULTS });
 
-  // Scheffler Dish custom fields
+  // Solar Parabolic Trough custom fields
+  const _PARABOLIC_BASE = {
+    toName: '',
+    qtnDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+    customerCompanyAndAddress: '',
+    customerCity: '',
+    subjectLine: '700 kg/hr Solar Parabolic Trough Steam Generation System',
+    systemCapacity: '700',
+    item1_desc: 'Solar Collector Field (52 Parabolic Trough Modules including Tracking, Structure & Supports)',
+    item1_amt: '134.40',
+    item2_desc: 'Thermal & Process System (Piping, Valves, Pumps, Tank, Insulation & Steam Distribution Network)',
+    item2_amt: '8.25',
+    item3_desc: 'Electrical & Automation System (Control Panel, Instrumentation, Cabling & Accessories)',
+    item3_amt: '3.49',
+    item4_desc: 'Civil & Structural Works (Foundations & Support Structures)',
+    item4_amt: '2.00',
+    item5_desc: 'Installation, Testing, Commissioning, Project Execution & Complete EPC Integration and Transportation charges etc.',
+    item5_amt: '53.46',
+    deliveryWeeks: '12–14',
+    paymentTerms: '70% Advance along with PO, 20% with 100% taxes against Performa invoice after inspection at factory prior to despatch, 10% after Installation',
+  };
+  const PARABOLIC_DEFAULTS = { ..._PARABOLIC_BASE, ...calcParabolicTotals(_PARABOLIC_BASE) };
+  const [parabolicFields, setParabolicFields] = useState({ ...PARABOLIC_DEFAULTS });
+
+  // Solar Parabolic Cooker custom fields
+  const EMPTY_COOKER_ROW = () => ({ noOfMonth: '', lpgPerMonth: '' });
+  const COOKER_DEFAULTS = {
+    item_desc: 'Supply of 4 Sq mtr Solar Parabolic cooker',
+    item_qty: '1',
+    item_price: '125000',
+    gstRate: '18',
+    packingRate: '3',
+    packingCharge: 'Extra',
+    freightTerms: 'To your account',
+    installCharge: 'Extra',
+    pricePerCylinder: '180',
+    kgPerCylinder: '19.2',
+    monthsPerYear: '10',
+    paybackPeriod: '1 year (10 Months).',
+    feasibilityRows: [
+      { noOfMonth: '1',  lpgPerMonth: '10'  },
+      { noOfMonth: '10', lpgPerMonth: '100' },
+      { noOfMonth: '20', lpgPerMonth: '200' },
+      { noOfMonth: '28', lpgPerMonth: '280' },
+    ],
+  };
+  const [cookerFields, setCookerFields] = useState({ ...COOKER_DEFAULTS });
+
+  // Helpers for cooker feasibility rows
+  const addCookerRow    = () => setCookerFields(f => ({ ...f, feasibilityRows: [...f.feasibilityRows, EMPTY_COOKER_ROW()] }));
+  const removeCookerRow = (i) => setCookerFields(f => ({ ...f, feasibilityRows: f.feasibilityRows.filter((_, idx) => idx !== i) }));
+  const updateCookerRow = (i, field, val) => setCookerFields(f => ({
+    ...f,
+    feasibilityRows: f.feasibilityRows.map((row, idx) => idx === i ? { ...row, [field]: val } : row),
+  }));
   const SCHEFFLER_DEFAULTS = {
     toName: '',
     qtnDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
@@ -309,7 +373,65 @@ const LeadDetail = () => {
 
     let payload;
 
-    if (quotTemplateType === 'SOLAR_TUNNEL_DRYER') {
+    if (quotTemplateType === 'SOLAR_PARABOLIC_COOKER') {
+      const placeholderProduct = products.find(p => p.isActive);
+      const priceNum = parseFloat(cookerFields.item_price) || 0;
+      const gstNum   = Math.round(priceNum * (parseFloat(cookerFields.gstRate) || 18) / 100);
+      const syntheticItems = placeholderProduct ? [{
+        productId: placeholderProduct.id,
+        description: cookerFields.item_desc,
+        quantity: parseInt(cookerFields.item_qty) || 1,
+        unitPrice: priceNum,
+        discount: 0,
+        taxRate: parseFloat(cookerFields.gstRate) || 18,
+      }] : [];
+
+      payload = {
+        leadId: id,
+        templateType: 'SOLAR_PARABOLIC_COOKER',
+        customFields: {
+          ...cookerFields,
+          item_price: priceNum.toLocaleString('en-IN') + '/-',
+          gstAmount:  gstNum.toLocaleString('en-IN'),
+        },
+        items: syntheticItems,
+        paymentTerms: '',
+        deliveryTerms: '',
+        notes: '',
+        discountPercent: 0,
+      };
+    } else if (quotTemplateType === 'SOLAR_PARABOLIC_TROUGH') {
+      const placeholderProduct = products.find(p => p.isActive);
+      // Compute numeric total from the Lakhs string (e.g. "201.60 Lakhs" -> 20160000)
+      const totalNumeric = (() => {
+        const num = parseFloat(parabolicFields.totalAmt);
+        return isNaN(num) ? 0 : num * 100000;
+      })();
+      const syntheticItems = placeholderProduct ? [{
+        productId: placeholderProduct.id,
+        description: parabolicFields.subjectLine,
+        quantity: 1,
+        unitPrice: totalNumeric,
+        discount: 0,
+        taxRate: 0,
+      }] : [];
+
+      payload = {
+        leadId: id,
+        templateType: 'SOLAR_PARABOLIC_TROUGH',
+        customFields: {
+          ...parabolicFields,
+          toName: parabolicFields.toName || currentLead?.customer?.contactName,
+          customerCompanyAndAddress: parabolicFields.customerCompanyAndAddress || currentLead?.customer?.companyName,
+          customerCity: parabolicFields.customerCity || currentLead?.customer?.city,
+        },
+        items: syntheticItems,
+        paymentTerms: parabolicFields.paymentTerms,
+        deliveryTerms: `${parabolicFields.deliveryWeeks} Weeks`,
+        notes: '',
+        discountPercent: 0,
+      };
+    } else if (quotTemplateType === 'SOLAR_TUNNEL_DRYER') {
       // For dryer template we create a synthetic single-item quotation
       // so that convertToSale always has proper numeric data.
       const unitP = parseFloat(dryerFields.unitPrice) || 0;
@@ -371,29 +493,6 @@ const LeadDetail = () => {
         notes: '',
         discountPercent: 0,
       };
-    } else {
-      // STANDARD template
-      const validItems = quotItems.filter(it => it.productId && it.unitPrice);
-      if (validItems.length === 0) {
-        setQuotSubmitting(false);
-        return alert('Add at least one product line item');
-      }
-      const { discountPercent, ...meta } = quotMeta;
-      payload = {
-        leadId: id,
-        templateType: 'STANDARD',
-        customFields: null,
-        discountPercent: parseFloat(discountPercent) || 0,
-        ...meta,
-        items: validItems.map(it => ({
-          productId: it.productId,
-          description: it.description,
-          quantity: parseInt(it.quantity) || 1,
-          unitPrice: parseFloat(it.unitPrice),
-          discount: parseFloat(it.discount) || 0,
-          taxRate: parseFloat(it.taxRate) || 18,
-        }))
-      };
     }
 
     const res = await createQuotation(payload);
@@ -402,9 +501,11 @@ const LeadDetail = () => {
       setShowQuotationForm(false);
       setQuotItems([EMPTY_QUOTATION_ITEM()]);
       setQuotMeta({ validUntil: '', paymentTerms: '', deliveryTerms: '', notes: '', discountPercent: 0 });
-      setQuotTemplateType('STANDARD');
+      setQuotTemplateType('SOLAR_PARABOLIC_TROUGH');
       setDryerFields({ ...DRYER_DEFAULTS });
       setSchefflerFields({ ...SCHEFFLER_DEFAULTS });
+      setParabolicFields({ ...PARABOLIC_DEFAULTS });
+      setCookerFields({ ...COOKER_DEFAULTS });
     } else {
       alert(res.error || 'Failed to create quotation');
     }
@@ -493,14 +594,24 @@ const LeadDetail = () => {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
               <h3 className="text-sm font-bold text-gray-800 mb-3">Assignment & Stage</h3>
               <div className="space-y-3">
-                <div>
-                  <label className="text-xs font-semibold text-gray-600 block mb-1">Assigned To</label>
-                  <select value={assignedTo?.id || ''} onChange={e => handleAssign(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
-                    <option value="">Unassigned</option>
-                    {users.map(u => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
-                  </select>
-                </div>
+                {/* Assigned To — admin only; employees cannot reassign */}
+                {user?.role === 'ADMIN' ? (
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 block mb-1">Assigned To</label>
+                    <select value={assignedTo?.id || ''} onChange={e => handleAssign(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+                      <option value="">Unassigned</option>
+                      {users.map(u => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
+                    </select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 block mb-1">Assigned To</label>
+                    <div className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700">
+                      {assignedTo ? `${assignedTo.firstName} ${assignedTo.lastName}` : 'Unassigned'}
+                    </div>
+                  </div>
+                )}
                 <div>
                   <label className="text-xs font-semibold text-gray-600 block mb-1">Lead Stage</label>
                   <select value={currentLead.status} onChange={e => handleStatusChange(e.target.value)}
@@ -978,126 +1089,309 @@ const LeadDetail = () => {
                             onChange={e => setQuotTemplateType(e.target.value)}
                             className="w-full p-2 border border-violet-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-violet-500 bg-white font-semibold text-violet-800"
                           >
-                            <option value="STANDARD">Standard Quotation</option>
+                            <option value="SOLAR_PARABOLIC_TROUGH">Solar Parabolic Trough</option>
+                            <option value="SOLAR_PARABOLIC_COOKER">Solar Parabolic Cooker</option>
                             <option value="SOLAR_TUNNEL_DRYER">Solar Tunnel Dryer</option>
                             <option value="SCHEFFLER_DISH">Scheffler Dish</option>
                           </select>
                         </div>
 
-                        {/* ══════════════════════════════════ */}
-                        {/* STANDARD template — existing form */}
-                        {/* ══════════════════════════════════ */}
-                        {quotTemplateType === 'STANDARD' && (<>
-                          <div>
-                            <div className="flex justify-between items-center mb-2">
-                              <label className="text-xs font-bold text-violet-900">Line Items</label>
-                              <button type="button" onClick={addQuotItem}
-                                className="text-xs text-violet-700 hover:text-violet-900 font-semibold flex items-center gap-1">
-                                <Plus size={12} /> Add Line
-                              </button>
+                        {/* ═══════════════════════════════════════════════════ */}
+                        {/* SOLAR PARABOLIC TROUGH template — custom fields */}
+                        {/* ═══════════════════════════════════════════════════ */}
+                        {quotTemplateType === 'SOLAR_PARABOLIC_TROUGH' && (
+                          <div className="space-y-3">
+                            <div className="bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 text-xs text-orange-800 font-medium">
+                              🌞 Fields below match the Solar Parabolic Trough quotation. All yellow-highlighted fields from the original docx are editable here.
                             </div>
-                            <div className="space-y-2">
-                              {quotItems.map((item, idx) => (
-                                <div key={idx} className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
-                                  <div className="flex gap-2">
-                                    <select value={item.productId} onChange={e => handleQuotProductSelect(idx, e.target.value)}
-                                      className="flex-1 text-sm p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400">
-                                      <option value="">-- Select Product --</option>
-                                      {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                    </select>
-                                    {quotItems.length > 1 && (
-                                      <button type="button" onClick={() => removeQuotItem(idx)}
-                                        className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors">
-                                        <X size={14} />
-                                      </button>
-                                    )}
-                                  </div>
-                                  <div className="grid grid-cols-4 gap-2 text-sm">
-                                    <div>
-                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Qty</label>
-                                      <input type="number" min={1} value={item.quantity}
-                                        onChange={e => updateQuotItem(idx, 'quantity', e.target.value)}
-                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Unit Price ₹</label>
-                                      <input type="number" min={0} value={item.unitPrice}
-                                        onChange={e => updateQuotItem(idx, 'unitPrice', e.target.value)}
-                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Disc %</label>
-                                      <input type="number" min={0} max={100} value={item.discount}
-                                        onChange={e => updateQuotItem(idx, 'discount', e.target.value)}
-                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] text-gray-500 font-semibold block mb-0.5">Tax %</label>
-                                      <input type="number" min={0} value={item.taxRate}
-                                        onChange={e => updateQuotItem(idx, 'taxRate', e.target.value)}
-                                        className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-violet-400" />
-                                    </div>
-                                  </div>
-                                  <input value={item.description} onChange={e => updateQuotItem(idx, 'description', e.target.value)}
-                                    placeholder="Custom description (optional)"
-                                    className="w-full p-1.5 border border-gray-200 rounded text-xs outline-none focus:ring-1 focus:ring-violet-400" />
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-2 gap-3 text-sm">
-                            <div>
-                              <label className="text-xs font-bold text-violet-900 block mb-1">Valid Until</label>
-                              <input type="date" value={quotMeta.validUntil}
-                                onChange={e => setQuotMeta({ ...quotMeta, validUntil: e.target.value })}
-                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                            </div>
-                            <div>
-                              <label className="text-xs font-bold text-violet-900 block mb-1">Overall Discount %</label>
-                              <input type="number" min={0} max={100} value={quotMeta.discountPercent}
-                                onChange={e => setQuotMeta({ ...quotMeta, discountPercent: e.target.value })}
-                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                            </div>
-                            <div>
-                              <label className="text-xs font-bold text-violet-900 block mb-1">Payment Terms</label>
-                              <input value={quotMeta.paymentTerms} onChange={e => setQuotMeta({ ...quotMeta, paymentTerms: e.target.value })}
-                                placeholder="e.g. 50% advance, balance on delivery"
-                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                            </div>
-                            <div>
-                              <label className="text-xs font-bold text-violet-900 block mb-1">Delivery Terms</label>
-                              <input value={quotMeta.deliveryTerms} onChange={e => setQuotMeta({ ...quotMeta, deliveryTerms: e.target.value })}
-                                placeholder="e.g. Ex-works, within 7 days"
-                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm" />
-                            </div>
-                            <div className="col-span-2">
-                              <label className="text-xs font-bold text-violet-900 block mb-1">Notes</label>
-                              <textarea value={quotMeta.notes} onChange={e => setQuotMeta({ ...quotMeta, notes: e.target.value })}
-                                rows={2} placeholder="Internal notes or additional remarks"
-                                className="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-violet-400 bg-white text-sm resize-none" />
-                            </div>
-                          </div>
-                          <div className="bg-white border border-violet-200 rounded-xl p-3 text-sm space-y-1">
-                            <div className="flex justify-between text-gray-600">
-                              <span>Subtotal</span><span>₹{totals.sub.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                            </div>
-                            {totals.discountAmt > 0 && (
-                              <div className="flex justify-between text-red-500">
-                                <span>Discount</span><span>-₹{totals.discountAmt.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                              </div>
-                            )}
-                            <div className="flex justify-between text-gray-600">
-                              <span>GST (18%)</span><span>₹{totals.tax.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                            </div>
-                            <div className="flex justify-between font-bold text-violet-800 pt-1 border-t border-violet-100">
-                              <span>Grand Total</span><span>₹{totals.total.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-                            </div>
-                          </div>
-                        </>)}
 
-                        {/* ═══════════════════════════════════════════ */}
-                        {/* SOLAR TUNNEL DRYER template — custom fields */}
-                        {/* ═══════════════════════════════════════════ */}
+                            {/* Row 1: To / Date */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">To (Contact Person)</label>
+                                <input value={parabolicFields.toName}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, toName: e.target.value })}
+                                  placeholder={currentLead?.customer?.contactName || 'Mr. / Ms. ...'}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Date</label>
+                                <input value={parabolicFields.qtnDate}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, qtnDate: e.target.value })}
+                                  placeholder="DD/MM/YYYY"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Company / Address / City */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Company &amp; Address (To block)</label>
+                                <input value={parabolicFields.customerCompanyAndAddress}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, customerCompanyAndAddress: e.target.value })}
+                                  placeholder={currentLead?.customer?.companyName || 'Company Name, City'}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">City</label>
+                                <input value={parabolicFields.customerCity}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, customerCity: e.target.value })}
+                                  placeholder="e.g. Sircilla"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Subject / System Capacity */}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Subject Line (System Description)</label>
+                                <input value={parabolicFields.subjectLine}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, subjectLine: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">System Capacity (kg/hr)</label>
+                                <input value={parabolicFields.systemCapacity}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, systemCapacity: e.target.value })}
+                                  placeholder="700"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Cost Breakdown Items */}
+                            <div className="border border-orange-200 rounded-xl p-3 bg-white">
+                              <label className="text-xs font-bold text-violet-900 block mb-2">Cost Breakdown (5 Line Items)</label>
+                              <div className="space-y-2">
+                                {/* Header */}
+                                <div className="flex gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider px-1">
+                                  <div className="flex-1">Description</div>
+                                  <div className="w-24 text-right">Amount (₹ Lakhs)</div>
+                                </div>
+                                {[1,2,3,4,5].map(n => (
+                                  <div key={n} className="flex gap-2 items-start bg-gray-50 p-2 rounded-lg border border-gray-100">
+                                    <div className="w-5 h-5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-1">{n}</div>
+                                    <div className="flex-1">
+                                      <textarea
+                                        rows={2}
+                                        value={parabolicFields[`item${n}_desc`]}
+                                        onChange={e => setParabolicFields({ ...parabolicFields, [`item${n}_desc`]: e.target.value })}
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm resize-none focus:ring-1 focus:ring-orange-400 outline-none bg-white" />
+                                    </div>
+                                    <div className="w-24">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        step="0.01"
+                                        value={parabolicFields[`item${n}_amt`]}
+                                        onChange={e => {
+                                          const updated = { ...parabolicFields, [`item${n}_amt`]: e.target.value };
+                                          const { totalAmt, amountWords } = calcParabolicTotals(updated);
+                                          setParabolicFields({ ...updated, totalAmt, amountWords });
+                                        }}
+                                        placeholder="0.00"
+                                        className="w-full p-1.5 border border-gray-200 rounded text-sm text-right focus:ring-1 focus:ring-orange-400 outline-none bg-white" />
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Total / Amount Words — auto-computed */}
+                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1.5">
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wide">Auto-Calculated Total (₹ Lakhs)</span>
+                                <span className="text-lg font-bold text-orange-700">₹ {parabolicFields.totalAmt} Lakhs</span>
+                              </div>
+                              <div className="text-xs text-amber-800 italic border-t border-amber-200 pt-1.5">
+                                {parabolicFields.amountWords}
+                              </div>
+                            </div>
+
+                            {/* Delivery Weeks / Payment Terms */}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div>
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Delivery Weeks</label>
+                                <input value={parabolicFields.deliveryWeeks}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, deliveryWeeks: e.target.value })}
+                                  placeholder="12–14"
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                              <div className="col-span-2">
+                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Payment Terms</label>
+                                <textarea rows={2} value={parabolicFields.paymentTerms}
+                                  onChange={e => setParabolicFields({ ...parabolicFields, paymentTerms: e.target.value })}
+                                  className="w-full p-1.5 border border-gray-200 rounded text-sm resize-none outline-none focus:ring-1 focus:ring-orange-400 bg-white" />
+                              </div>
+                            </div>
+
+                            {/* Total Preview */}
+                            <div className="bg-white border border-orange-200 rounded-xl p-3 text-sm">
+                              <div className="flex justify-between font-bold text-orange-800">
+                                <span>Total Quotation Value</span>
+                                <span>₹ {parabolicFields.totalAmt} Lakhs</span>
+                              </div>
+                              <div className="text-xs text-gray-500 mt-0.5">({parabolicFields.amountWords})</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ═══════════════════════════════════════════════════ */}
+                        {/* SOLAR PARABOLIC COOKER template — custom fields */}
+                        {/* ═══════════════════════════════════════════════════ */}
+                        {quotTemplateType === 'SOLAR_PARABOLIC_COOKER' && (
+                          <div className="space-y-3">
+                            <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-xs text-green-800 font-medium">
+                              🍳 Fields below match the Solar Parabolic Cooker quotation. All yellow-highlighted fields from the original docx are editable here.
+                            </div>
+
+                            {/* — Pricing Section — */}
+                            <div className="border border-green-200 rounded-xl p-3 bg-white">
+                              <label className="text-xs font-bold text-violet-900 block mb-2">Financial Offer (Pricing Table)</label>
+                              <div className="space-y-2">
+                                {/* Product Row */}
+                                <div className="flex gap-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider px-1">
+                                  <div className="flex-1">Description</div>
+                                  <div className="w-10">Qty</div>
+                                  <div className="w-24 text-right">Price (₹)</div>
+                                </div>
+                                <div className="flex gap-2 items-start bg-gray-50 p-2 rounded-lg border border-gray-100">
+                                  <div className="flex-1">
+                                    <input value={cookerFields.item_desc}
+                                      onChange={e => setCookerFields({ ...cookerFields, item_desc: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                  </div>
+                                  <div className="w-10">
+                                    <input type="number" min={1} value={cookerFields.item_qty}
+                                      onChange={e => setCookerFields({ ...cookerFields, item_qty: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm text-center focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                  </div>
+                                  <div className="w-24">
+                                    <input type="number" value={cookerFields.item_price}
+                                      onChange={e => setCookerFields({ ...cookerFields, item_price: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm text-right focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                  </div>
+                                </div>
+
+                                {/* GST / Packing Row */}
+                                <div className="grid grid-cols-4 gap-2">
+                                  <div>
+                                    <label className="text-[10px] font-bold text-gray-600 block mb-0.5">GST Rate (%)</label>
+                                    <input type="number" value={cookerFields.gstRate}
+                                      onChange={e => setCookerFields({ ...cookerFields, gstRate: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm text-right focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                    <div className="text-[10px] text-gray-400 mt-0.5 text-right">GST = ₹{Math.round((parseFloat(cookerFields.item_price)||0) * (parseFloat(cookerFields.gstRate)||18) / 100).toLocaleString('en-IN')}</div>
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Packing Rate (%)</label>
+                                    <input value={cookerFields.packingRate}
+                                      onChange={e => setCookerFields({ ...cookerFields, packingRate: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm text-right focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Packing Charge</label>
+                                    <input value={cookerFields.packingCharge}
+                                      onChange={e => setCookerFields({ ...cookerFields, packingCharge: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                  </div>
+                                  <div>
+                                    <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Freight & Ins.</label>
+                                    <input value={cookerFields.freightTerms}
+                                      onChange={e => setCookerFields({ ...cookerFields, freightTerms: e.target.value })}
+                                      className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                  </div>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Installation & Commissioning Charge</label>
+                                  <input value={cookerFields.installCharge}
+                                    onChange={e => setCookerFields({ ...cookerFields, installCharge: e.target.value })}
+                                    className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* — Feasibility / Payback Settings — */}
+                            <div className="border border-green-200 rounded-xl p-3 bg-white">
+                              <div className="flex justify-between items-center mb-2">
+                                <label className="text-xs font-bold text-violet-900">Feasibility / Payback Calculation Settings</label>
+                              </div>
+                              <div className="grid grid-cols-3 gap-2">
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Price per Cylinder (₹)</label>
+                                  <input type="number" value={cookerFields.pricePerCylinder}
+                                    onChange={e => setCookerFields({ ...cookerFields, pricePerCylinder: e.target.value })}
+                                    className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Kg per Cylinder</label>
+                                  <input type="number" step="0.1" value={cookerFields.kgPerCylinder}
+                                    onChange={e => setCookerFields({ ...cookerFields, kgPerCylinder: e.target.value })}
+                                    className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Months/Year (Payback)</label>
+                                  <input type="number" value={cookerFields.monthsPerYear}
+                                    onChange={e => setCookerFields({ ...cookerFields, monthsPerYear: e.target.value })}
+                                    className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* — Feasibility Rows Table — */}
+                            <div className="border border-green-200 rounded-xl p-3 bg-white">
+                              <div className="flex justify-between items-center mb-2">
+                                <label className="text-xs font-bold text-violet-900">Feasibility / Payback Table Rows</label>
+                                <button type="button" onClick={addCookerRow}
+                                  className="text-xs px-2 py-1 bg-green-100 text-green-700 hover:bg-green-200 font-semibold rounded-lg">
+                                  + Add Row
+                                </button>
+                              </div>
+                              {/* Header */}
+                              <div className="flex gap-1 text-[10px] font-bold text-gray-500 uppercase px-1 mb-1">
+                                <div className="w-14">No. of Month</div>
+                                <div className="w-20">LPG/Month</div>
+                                <div className="w-16">Kg LPG</div>
+                                <div className="w-20">Amt (₹)</div>
+                                <div className="flex-1">Total Amt (₹)</div>
+                                <div className="w-6"></div>
+                              </div>
+                              <div className="space-y-1">
+                                {cookerFields.feasibilityRows.map((row, idx) => {
+                                  const lpg    = parseFloat(row.lpgPerMonth) || 0;
+                                  const kgLpg  = (lpg * (parseFloat(cookerFields.kgPerCylinder) || 19.2)).toFixed(1);
+                                  const amt    = Math.round(lpg * (parseFloat(cookerFields.pricePerCylinder) || 180));
+                                  const totAmt = Math.round(amt * (parseFloat(cookerFields.monthsPerYear) || 10));
+                                  return (
+                                    <div key={idx} className="flex gap-1 items-center bg-gray-50 p-1.5 rounded border border-gray-100 group hover:border-green-300 transition-colors">
+                                      <input value={row.noOfMonth}
+                                        onChange={e => updateCookerRow(idx, 'noOfMonth', e.target.value)}
+                                        placeholder="1"
+                                        className="w-14 p-1 border border-gray-200 rounded text-sm text-center focus:ring-1 focus:ring-green-400 outline-none" />
+                                      <input type="number" value={row.lpgPerMonth}
+                                        onChange={e => updateCookerRow(idx, 'lpgPerMonth', e.target.value)}
+                                        placeholder="10"
+                                        className="w-20 p-1 border border-gray-200 rounded text-sm text-right focus:ring-1 focus:ring-green-400 outline-none" />
+                                      <div className="w-16 p-1 text-sm text-right font-semibold text-gray-600">{kgLpg}</div>
+                                      <div className="w-20 p-1 text-sm text-right font-semibold text-gray-600">{amt.toLocaleString('en-IN')}</div>
+                                      <div className="flex-1 p-1 text-sm text-right font-bold text-green-700">{totAmt.toLocaleString('en-IN')}</div>
+                                      <button type="button" onClick={() => removeCookerRow(idx)}
+                                        className="w-6 p-1 text-gray-300 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-all">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            {/* — Payback Period — */}
+                            <div>
+                              <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Payback Period Statement</label>
+                              <input value={cookerFields.paybackPeriod}
+                                onChange={e => setCookerFields({ ...cookerFields, paybackPeriod: e.target.value })}
+                                className="w-full p-1.5 border border-gray-200 rounded text-sm focus:ring-1 focus:ring-green-400 outline-none bg-white" />
+                            </div>
+                          </div>
+                        )}
                         {quotTemplateType === 'SOLAR_TUNNEL_DRYER' && (
                           <div className="space-y-3">
                             <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800 font-medium">

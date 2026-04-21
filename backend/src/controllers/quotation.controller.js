@@ -10,7 +10,7 @@ const generateQuotationNumber = async () => {
   return `Q-${String(count + 1).padStart(5, '0')}`;
 };
 
-// ─── Load company logo as Base64 (embedded in PDF — Puppeteer can't fetch URLs) ─
+// â”€â”€â”€ Load company logo as Base64 (embedded in PDF â€” Puppeteer can't fetch URLs) â”€
 const getLogoBase64 = () => {
   const exts = ['png', 'jpg', 'jpeg', 'svg', 'webp'];
   const assetsDir = path.join(__dirname, '../assets');
@@ -33,6 +33,10 @@ exports.getQuotations = async (req, res) => {
     const where = {};
     if (leadId) where.leadId = leadId;
     if (status) where.status = status;
+    // Role-based filter: employees only see their own quotations
+    if (req.user.role === 'EMPLOYEE') {
+      where.createdById = req.user.id;
+    }
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [quotations, total] = await Promise.all([
       prisma.quotation.findMany({
@@ -86,7 +90,7 @@ exports.getQuotationById = async (req, res) => {
   }
 };
 
-// Create quotation — accepts templateType + customFields for product-specific formats
+// Create quotation â€” accepts templateType + customFields for product-specific formats
 exports.createQuotation = async (req, res) => {
   try {
     const {
@@ -191,7 +195,7 @@ exports.createQuotation = async (req, res) => {
       data: {
         leadId,
         action: 'Quotation Created',
-        description: `Quotation ${quotationNumber} [${templateType}] created — ₹${totalAmount.toLocaleString()}`,
+        description: `Quotation ${quotationNumber} [${templateType}] created â€” â‚¹${totalAmount.toLocaleString()}`,
         performedBy: req.user.id
       }
     });
@@ -202,11 +206,11 @@ exports.createQuotation = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // TEMPLATE FACTORY FUNCTIONS
 // To add a new product format: add a new function below and
 // add a new case to the switch in generatePDF().
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildStandardHTML(quotation) {
   const logoSrc = getLogoBase64();
@@ -227,9 +231,9 @@ function buildStandardHTML(quotation) {
         </td>
         <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${hsn}</td>
         <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${qty}</td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${rate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">â‚¹${rate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
         <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${uom}</td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${itemTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">â‚¹${itemTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
       </tr>`;
   }).join('');
 
@@ -283,13 +287,13 @@ function buildStandardHTML(quotation) {
         <img src="${logoSrc}" style="width:70px;height:auto;object-fit:contain;">
         <div style="line-height:1.5;">
           <div class="name">KVB Green Energies</div>
-          <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad – 580011, Karnataka, India</p>
+          <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad â€“ 580011, Karnataka, India</p>
           <p>Phone: +91 95455 29950, +91 74118 93555</p>
           <p style="font-weight:bold;">GSTIN: 29AAXFK4926A1Z0</p>
         </div>
       </div>` : `
       <div class="name">KVB Green Energies</div>
-      <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad – 580011, Karnataka, India</p>
+      <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad â€“ 580011, Karnataka, India</p>
       <p>Phone: +91 95455 29950, +91 74118 93555</p>
       <p style="font-weight:bold;">GSTIN: 29AAXFK4926A1Z0</p>`}
     </div>
@@ -299,7 +303,7 @@ function buildStandardHTML(quotation) {
         <div class="meta-cell"><span class="meta-label">Dated</span><span class="meta-value">${new Date(quotation.quotationDate).toLocaleDateString('en-IN')}</span></div>
       </div>
       <div class="meta-row">
-        <div class="meta-cell"><span class="meta-label">Valid Until</span><span class="meta-value">${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString('en-IN') : '—'}</span></div>
+        <div class="meta-cell"><span class="meta-label">Valid Until</span><span class="meta-value">${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString('en-IN') : 'â€”'}</span></div>
         <div class="meta-cell"><span class="meta-label">Lead Reference</span><span class="meta-value">${quotation.lead.leadNumber}</span></div>
       </div>
     </div>
@@ -335,7 +339,7 @@ function buildStandardHTML(quotation) {
       ${itemsRows}
       <tr class="total-row">
         <td></td><td><strong>Total</strong></td><td></td><td></td><td></td><td></td>
-        <td style="text-align:right;"><strong>₹${Number(quotation.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
+        <td style="text-align:right;"><strong>â‚¹${Number(quotation.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
       </tr>
     </tbody>
   </table>
@@ -373,14 +377,14 @@ function buildStandardHTML(quotation) {
 
 /**
  * Solar Tunnel Dryer quotation PDF.
- * Exactly matches "Dryer format for CRM.docx" — same approach as buildInvoiceHTML.
+ * Exactly matches "Dryer format for CRM.docx" â€” same approach as buildInvoiceHTML.
  * Images extracted from the docx are embedded as base64.
  * Editable (yellow-highlighted) fields come from quotation.customFields.
  */
 function buildSolarTunnelDryerHTML(quotation) {
   const cf = quotation.customFields || {};
 
-  // ── Load reference images from docx as base64 (Puppeteer can't fetch file:// paths) ──
+  // â”€â”€ Load reference images from docx as base64 (Puppeteer can't fetch file:// paths) â”€â”€
   const getDryerImg = (filename) => {
     const p = path.join(__dirname, '../assets/dryer', filename);
     if (!fs.existsSync(p)) return null;
@@ -394,7 +398,7 @@ function buildSolarTunnelDryerHTML(quotation) {
   // Full Page Stationery Watermark (Header + Fade + Footer)
   const letterheadGraphic = getDryerImg('new_img1.png');
 
-  // ── Editable fields (yellow-highlighted in docx) ──
+  // â”€â”€ Editable fields (yellow-highlighted in docx) â”€â”€
   const toName        = cf.toName        || quotation.customer.contactName;
   const qtnDate       = cf.qtnDate       || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const subjectLine   = cf.subjectLine   || 'QTN.KVB.STD.005. A.080426 Solar Tunnel Dryer for 20w x 54L = 1080 Sq ft';
@@ -408,7 +412,7 @@ function buildSolarTunnelDryerHTML(quotation) {
   const itemDesc      = cf.itemDesc      || 'Supply and installation of Polycarbonate sheet covered Solar Tunnel Dryer 1080 Sq ft.';
   const qty           = cf.qty           || '01';
   const units         = cf.units         || 'Set';
-  // totalAmt for the table — always use quotation.totalAmount (guaranteed correct by createQuotation)
+  // totalAmt for the table â€” always use quotation.totalAmount (guaranteed correct by createQuotation)
   const unitPrice = Number(cf.unitPrice) || Number(quotation.totalAmount);
   const totalAmt  = Number(quotation.totalAmount) || Number(cf.totalAmt) || Number(cf.unitPrice) || 0;
   const paymentTerms  = cf.paymentTerms  || '70% Advance along with PO 30% against Performa invoice after inspection at factory prior to despatch';
@@ -419,7 +423,7 @@ function buildSolarTunnelDryerHTML(quotation) {
 
   const fmt = (v) => Number(v).toLocaleString('en-IN', { minimumFractionDigits: 0 });
 
-  // Amount in words — derives from totalAmt (same variable as Grand Total cell — always in sync)
+  // Amount in words â€” derives from totalAmt (same variable as Grand Total cell â€” always in sync)
   const amountWords = numberToWords(totalAmt);
 
   return `<!DOCTYPE html>
@@ -438,7 +442,7 @@ function buildSolarTunnelDryerHTML(quotation) {
     color: #000; 
   }
 
-  /* ── FULL PAGE STATIONERY BACKGROUND ── */
+  /* â”€â”€ FULL PAGE STATIONERY BACKGROUND â”€â”€ */
   .letterhead-bg {
     position: fixed;
     top: 0;
@@ -449,37 +453,37 @@ function buildSolarTunnelDryerHTML(quotation) {
     object-fit: cover;
   }
 
-  /* ── Page Layout ── */
+  /* â”€â”€ Page Layout â”€â”€ */
   .layout-table { width: 100%; border-collapse: collapse; border: none; }
   .layout-table > thead > tr > td { height: 155px; border: none; padding: 0; }
   .layout-table > tfoot > tr > td { height: 90px;  border: none; padding: 0; }
   .content-cell { padding: 20px 50px 0 50px; vertical-align: top; }
 
-  /* ── To/Date line ── */
+  /* â”€â”€ To/Date line â”€â”€ */
   .to-date { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11pt; }
   .to-line { font-size: 11pt; }
   .date-line { font-size: 11pt; white-space: nowrap; }
 
-  /* ── Subject ── */
+  /* â”€â”€ Subject â”€â”€ */
   .sub-line { font-weight: bold; font-size: 11pt; margin: 8px 0 16px 0; }
 
-  /* ── Body paragraphs ── */
+  /* â”€â”€ Body paragraphs â”€â”€ */
   .para { font-size: 11pt; margin: 6px 0; line-height: 1.55; text-align: justify; }
   .ol-sections { margin: 6px 0 10px 40px; font-size: 11pt; line-height: 1.6; }
   .ol-sections li { font-style: italic; font-weight: bold; }
   .sign-off { margin-top: 15px; font-size: 11pt; line-height: 1.6; }
 
-  /* ── Section headings (numbered) ── */
+  /* â”€â”€ Section headings (numbered) â”€â”€ */
   .sec-head { font-weight: bold; font-size: 11pt; margin: 14px 0 6px 0; }
 
-  /* ── Technical spec table ── */
+  /* â”€â”€ Technical spec table â”€â”€ */
   .spec-wrap { margin-bottom: 15px; margin-top: 15px; }
   .spec-title { font-weight: bold; font-size: 11pt; text-align: center; border: 1px solid #000; border-bottom: none; padding: 5px; background: transparent; }
   .spec-table { width: 100%; border-collapse: collapse; }
   .spec-table td { border: 1px solid #000; padding: 4px 8px; font-size: 10.5pt; vertical-align: top; }
   .spec-table td:first-child { width: 35%; font-weight: normal; }
 
-  /* ── Financial offer table ── */
+  /* â”€â”€ Financial offer table â”€â”€ */
   .fin-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
   .fin-table th { border: 1px solid #000; padding: 5px 8px; font-size: 10.5pt; font-style: italic; font-weight: bold; text-align: center; background: transparent; }
   .fin-table td { border: 1px solid #000; padding: 5px 8px; font-size: 10.5pt; vertical-align: top; }
@@ -487,32 +491,32 @@ function buildSolarTunnelDryerHTML(quotation) {
   .fin-table .right { text-align: right; }
   .fin-table .total-row td { font-weight: bold; font-style: italic; }
 
-  /* ── Amount in words ── */
+  /* â”€â”€ Amount in words â”€â”€ */
   .amt-words { font-weight: bold; font-size: 11pt; margin: 6px 0 14px 0; }
 
-  /* ── Terms sub-headings ── */
+  /* â”€â”€ Terms sub-headings â”€â”€ */
   .terms-h { font-weight: bold; font-size: 12pt; color: #1F497D; margin: 16px 0 6px 0; }
   .terms-ul { margin: 0 0 6px 26px; font-size: 11pt; list-style: disc; }
   .terms-ul li { margin: 3px 0; line-height: 1.55; }
 
-  /* ── Bank details ── */
+  /* â”€â”€ Bank details â”€â”€ */
   .bank-label { font-style: italic; font-weight: bold; font-size: 12pt; color: #1F497D; margin: 12px 0 4px 0; }
   .bank-table { border-collapse: collapse; font-size: 11pt; font-style: italic; }
   .bank-table td { padding: 2px 8px 2px 0; vertical-align: top; }
 
-  /* ── Reference photos ── */
+  /* â”€â”€ Reference photos â”€â”€ */
   .ref-title { font-weight: bold; font-size: 12pt; margin: 14px 0 10px 0; }
   .ref-img { max-width: 480px; width: 100%; height: auto; margin: 6px auto; display: block; }
   .page-break { page-break-before: always; }
   
-  /* ── Social Media ── */
+  /* â”€â”€ Social Media â”€â”€ */
   .social-block { font-size: 10pt; font-weight: bold; line-height: 1.6; margin-top: 20px; }
   .social-block a { color: blue; text-decoration: none; word-break: break-all; }
 </style>
 </head>
 <body>
 
-  <!-- ══ STATIONERY BACKGROUND (REPEATS EVERY PAGE) ══ -->
+  <!-- â•â• STATIONERY BACKGROUND (REPEATS EVERY PAGE) â•â• -->
   ${letterheadGraphic ? `<img src="${letterheadGraphic}" class="letterhead-bg" alt="" />` : ''}
 
   <table class="layout-table">
@@ -523,7 +527,7 @@ function buildSolarTunnelDryerHTML(quotation) {
       <tr>
         <td class="content-cell">
 
-          <!-- ══ TO / DATE ══ -->
+          <!-- â•â• TO / DATE â•â• -->
           <div class="to-date">
             <div class="to-line">
               To,<br/>
@@ -532,10 +536,10 @@ function buildSolarTunnelDryerHTML(quotation) {
             <div class="date-line">Date :${qtnDate}</div>
           </div>
 
-          <!-- ══ SUBJECT ══ -->
+          <!-- â•â• SUBJECT â•â• -->
           <div class="sub-line">Sub: ${subjectLine}</div>
 
-          <!-- ══ INTRO LETTER ══ -->
+          <!-- â•â• INTRO LETTER â•â• -->
           <p class="para">We thank you for the valuable enquiry. We have great pleasure in proposing our best &amp; most competitive offer, as enumerated below for your kind perusal.</p>
           <p class="para">For your easy evaluation we have segregated the proposal as below:</p>
           <div style="margin: 6px 0 12px 20px;">
@@ -554,8 +558,8 @@ function buildSolarTunnelDryerHTML(quotation) {
           <!-- End of Page 1 Document Flow -->
           <div class="page-break"></div>
 
-          <!-- ══ PAGE 2: TECH SPECS TABLE & FINANCIAL OFFER ══ -->
-          <!-- ══ SECTION 1: TECHNICAL SPECIFICATIONS (Heading on Page 2) ══ -->
+          <!-- â•â• PAGE 2: TECH SPECS TABLE & FINANCIAL OFFER â•â• -->
+          <!-- â•â• SECTION 1: TECHNICAL SPECIFICATIONS (Heading on Page 2) â•â• -->
           <div style="font-weight:bold; font-size:11pt; margin-bottom: 20px;">1. Technical Specifications</div>
           
           <div class="spec-wrap">
@@ -615,7 +619,7 @@ function buildSolarTunnelDryerHTML(quotation) {
 
           <div class="page-break"></div>
 
-          <!-- ══ PAGE 3: TERMS & CONDITIONS ══ -->
+          <!-- â•â• PAGE 3: TERMS & CONDITIONS â•â• -->
           <div style="font-weight:bold; font-size:11pt; margin-bottom:15px; margin-left:20px;">
             3. Term &amp; condition:
           </div>
@@ -652,7 +656,7 @@ function buildSolarTunnelDryerHTML(quotation) {
           <div class="terms-h" style="margin-bottom:4px;">GST Details:</div>
           <div style="font-size:11.5pt; font-weight:bold; font-style:italic; color:#1F497D; margin-bottom:20px;">29AAXFK4926A1Z0 (KVB GREEN ENERGIES)</div>
 
-          <!-- ══ BANK DETAILS ══ -->
+          <!-- â•â• BANK DETAILS â•â• -->
           <table style="width: 100%; border-collapse: collapse;">
             <tr>
               <td style="width: 30%; vertical-align: top;">
@@ -673,7 +677,7 @@ function buildSolarTunnelDryerHTML(quotation) {
 
           <div class="page-break"></div>
 
-          <!-- ══ PAGE 4: REFERENCE PHOTOS ══ -->
+          <!-- â•â• PAGE 4: REFERENCE PHOTOS â•â• -->
           <div class="ref-title">Reference Photos</div>
           
           <div style="margin-bottom:5px;">
@@ -686,7 +690,7 @@ function buildSolarTunnelDryerHTML(quotation) {
           </div>
           ${img2 ? `<img src="${img2}" class="ref-img" alt="Coffee Beans Drying"/>` : ''}
 
-          <!-- ══ SOCIAL MEDIA ══ -->
+          <!-- â•â• SOCIAL MEDIA â•â• -->
           <div class="social-block">
             <div style="margin-bottom:4px;">For More details - Follow us on social media</div>
             <div style="margin-bottom:4px;">Instagram - <a href="https://www.instagram.com/kvb.digital/?igsh=MTRseDExdnN0MGUycQ%3D%3D#">https://www.instagram.com/kvb.digital/?igsh=MTRseDExdnN0MGUycQ%3D%3D#</a></div>
@@ -708,11 +712,11 @@ function buildSolarTunnelDryerHTML(quotation) {
 
 
 
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// Generate PDF — Template Factory dispatch
+// Generate PDF â€” Template Factory dispatch
 // Add new product formats here by adding a new case + function.
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 exports.generatePDF = async (req, res) => {
   try {
     const { id } = req.params;
@@ -734,7 +738,7 @@ exports.generatePDF = async (req, res) => {
       case 'SOLAR_TUNNEL_DRYER':
         html = buildSolarTunnelDryerHTML(quotation);
         break;
-      // ── Future templates go here ──
+      // â”€â”€ Future templates go here â”€â”€
       // case 'SOLAR_WATER_HEATER':
       //   html = buildSolarWaterHeaterHTML(quotation);
       //   break;
@@ -772,9 +776,9 @@ exports.generatePDF = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// Convert quotation to sale — UNCHANGED
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Convert quotation to sale â€” UNCHANGED
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 exports.convertToSale = async (req, res) => {
   try {
     const { id } = req.params;
@@ -862,7 +866,7 @@ exports.convertToSale = async (req, res) => {
       data: {
         leadId:      quotation.leadId,
         action:      'Quotation Converted to Sale',
-        description: `Quotation ${quotation.quotationNumber} converted → Sale ${sale.saleNumber}`,
+        description: `Quotation ${quotation.quotationNumber} converted â†’ Sale ${sale.saleNumber}`,
         performedBy: req.user.id,
       }
     });
@@ -873,9 +877,9 @@ exports.convertToSale = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Generate DOCX
-// ─────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 exports.generateDOCX = async (req, res) => {
   try {
     const { id } = req.params;
@@ -892,7 +896,7 @@ exports.generateDOCX = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
 
-    // ── Solar Tunnel Dryer: use native Word template for 100% layout replica ──
+    // â”€â”€ Solar Tunnel Dryer: use native Word template for 100% layout replica â”€â”€
     if (quotation.templateType === 'SOLAR_TUNNEL_DRYER') {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
@@ -941,7 +945,116 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
-    // ── Scheffler Dish: use native Word template ──
+    // â”€â”€ Solar Parabolic Cooker: use native Word template â”€â”€
+    if (quotation.templateType === 'SOLAR_PARABOLIC_COOKER') {
+      const PizZip = require('pizzip');
+      const Docxtemplater = require('docxtemplater');
+      const templatePath = path.join(__dirname, '../assets/cooker_template.docx');
+      let rawContent;
+      try {
+        rawContent = fs.readFileSync(templatePath, 'binary');
+      } catch (err) {
+        return res.status(500).json({ success: false, message: 'cooker_template.docx not found in assets.' });
+      }
+
+      const cf = quotation.customFields || {};
+
+      // Build feasibility rows â€” auto-calc kgOfLpg, amount, totalAmount
+      const pricePerCylinder = parseFloat(cf.pricePerCylinder) || 180;
+      const kgPerCylinder    = parseFloat(cf.kgPerCylinder)    || 19.2;
+      const monthsPerYear    = parseInt(cf.monthsPerYear)       || 10;
+
+      const feasibilityRows = (cf.feasibilityRows || []).map(row => {
+        const lpg      = parseFloat(row.lpgPerMonth) || 0;
+        const kgOfLpg  = (lpg * kgPerCylinder).toFixed(1);
+        const amount   = Math.round(lpg * pricePerCylinder);
+        const totalAmt = Math.round(amount * monthsPerYear);
+        return {
+          noOfMonth:   String(row.noOfMonth   || ''),
+          lpgPerMonth: String(lpg),
+          kgOfLpg:     String(kgOfLpg),
+          amount:      amount.toLocaleString('en-IN'),
+          totalAmount: totalAmt.toLocaleString('en-IN'),
+        };
+      });
+
+      const zip = new PizZip(rawContent);
+      const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
+      doc.render({
+        // Para 9
+        paybackPeriod: cf.paybackPeriod || '1 year (10 Months).',
+
+        // Table 1 â€” pricing
+        item_desc:     cf.item_desc    || 'Supply of 4 Sq mtr Solar Parabolic cooker',
+        item_qty:      cf.item_qty     || '1',
+        item_price:    cf.item_price   || '1,25,000/-',
+        gstRate:       cf.gstRate      || '18',
+        gstAmount:     cf.gstAmount    || '',
+        packingRate:   cf.packingRate  || '3',
+        packingCharge: cf.packingCharge|| 'Extra',
+        freightTerms:  cf.freightTerms || 'To your account',
+        installCharge: cf.installCharge|| 'Extra',
+
+        // Table 2 â€” dynamic feasibility loop
+        feasibilityRows,
+      });
+
+      const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename=Quotation-${quotation.quotationNumber}.docx`);
+      return res.send(buf);
+    }
+
+    // â”€â”€ Solar Parabolic Trough: use native Word template â”€â”€
+    if (quotation.templateType === 'SOLAR_PARABOLIC_TROUGH') {
+      const PizZip = require('pizzip');
+      const Docxtemplater = require('docxtemplater');
+      const templatePath = path.join(__dirname, '../assets/parabolic_trough_template.docx');
+      let rawContent;
+      try {
+        rawContent = fs.readFileSync(templatePath, 'binary');
+      } catch (err) {
+        return res.status(500).json({ success: false, message: 'parabolic_trough_template.docx not found in assets.' });
+      }
+
+      const cf = quotation.customFields || {};
+      const zip = new PizZip(rawContent);
+      const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+
+      doc.render({
+        qtnDate:                    cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        toName:                     cf.toName || quotation.customer?.contactName || '',
+        customerCompanyAndAddress:  cf.customerCompanyAndAddress || quotation.customer?.companyName || '',
+        customerCity:               cf.customerCity || quotation.customer?.city || '',
+        subjectLine:                cf.subjectLine || '700 kg/hr Solar Parabolic Trough Steam Generation System',
+        systemCapacity:             cf.systemCapacity || '700',
+
+        // 5 line items
+        item1_desc: cf.item1_desc || '',
+        item1_amt:  cf.item1_amt  || '0.00',
+        item2_desc: cf.item2_desc || '',
+        item2_amt:  cf.item2_amt  || '0.00',
+        item3_desc: cf.item3_desc || '',
+        item3_amt:  cf.item3_amt  || '0.00',
+        item4_desc: cf.item4_desc || '',
+        item4_amt:  cf.item4_amt  || '0.00',
+        item5_desc: cf.item5_desc || '',
+        item5_amt:  cf.item5_amt  || '0.00',
+
+        totalAmt:    cf.totalAmt    || '0.00',
+        amountWords: cf.amountWords || '',
+        deliveryWeeks: cf.deliveryWeeks || '12\u201314',
+        paymentTerms:  cf.paymentTerms  || '',
+      });
+
+      const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      res.setHeader('Content-Disposition', `attachment; filename=Quotation-${quotation.quotationNumber}.docx`);
+      return res.send(buf);
+    }
+
+    // â”€â”€ Scheffler Dish: use native Word template â”€â”€
     if (quotation.templateType === 'SCHEFFLER_DISH') {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
@@ -1022,7 +1135,7 @@ exports.generateDOCX = async (req, res) => {
         totalAmt:    totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
         amountWords: cf.amountWords || ('Rupees ' + numberToWords(totalAmt) + ' Only'),
 
-        // Economic Viability – Current
+        // Economic Viability â€“ Current
         cylindersPerDay:              fmt(cf.cylindersPerDay),
         costPerCylinder:              fmt(cf.costPerCylinder),
         cylinderCostPerDay:           fmt(cf.cylinderCostPerDay),
@@ -1034,7 +1147,7 @@ exports.generateDOCX = async (req, res) => {
         setupCostCurrent:             '0',
         totalCost1YearCurrent:        fmt(cf.totalCost1YearCurrent),
 
-        // Economic Viability – Proposed
+        // Economic Viability â€“ Proposed
         cylindersPerDayProposed:             '0',
         costPerCylinderProposed:             '0',
         cylinderCostPerDayProposed:          '0',
@@ -1047,7 +1160,7 @@ exports.generateDOCX = async (req, res) => {
         totalCost1YearProposed:              fmt(cf.totalCost1YearProposed),
         roi:                                 cf.roi || '0',
 
-        // Cost Analysis – 10 Years
+        // Cost Analysis â€“ 10 Years
         annualMaintenanceCostCurrent:   '0',
         tenYearMaintenanceCostCurrent:  '0',
         totalCost10YearsCurrent:        fmt(cf.totalCost10YearsCurrent),
@@ -1071,7 +1184,7 @@ exports.generateDOCX = async (req, res) => {
     }
 
 
-    // ── Standard quotation: fall back to html-to-docx ─────────────────────────
+    // â”€â”€ Standard quotation: fall back to html-to-docx â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const html = buildStandardHTML(quotation);
     const htmlToDocx = require('html-to-docx');
     const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import KanbanBoard from '../components/KanbanBoard';
@@ -6,20 +6,29 @@ import LeadForm from '../components/LeadForm';
 import CSVImportModal from '../components/CSVImportModal';
 import { useLeadStore } from '../stores/leadStore';
 import { useCampaignStore } from '../stores/campaignStore';
-import { Plus, Send, CheckSquare, X, FileSpreadsheet, Upload } from 'lucide-react';
+import { useUserStore } from '../stores/userStore';
+import { useAuthStore } from '../stores/authStore';
+import { Plus, Send, CheckSquare, X, FileSpreadsheet, Upload, Users } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import api from '../services/api';
 
 const Leads = () => {
   const navigate = useNavigate();
   const [showForm, setShowForm] = useState(false);
-  const { leads, fetchLeads } = useLeadStore();
+  const { leads, fetchLeads, filters, setFilters } = useLeadStore();
   const { createCampaign, isLoading: isCampaignLoading } = useCampaignStore();
+  const { users, fetchUsers } = useUserStore();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === 'ADMIN';
 
   const [isBulkMode, setIsBulkMode] = useState(false);
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [showBroadcastModal, setShowBroadcastModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+
+  useEffect(() => {
+    if (isAdmin) fetchUsers();
+  }, [isAdmin, fetchUsers]);
   
   const handleExportLeads = () => {
     const rows = leads.map(l => ({
@@ -30,6 +39,7 @@ const Leads = () => {
       'Email': l.customer?.email || '',
       'Status': l.status,
       'Source': l.source,
+      'Assigned To': l.assignedTo ? `${l.assignedTo.firstName} ${l.assignedTo.lastName}` : 'Unassigned',
       'Estimate (₹)': l.estimateAmount || 0,
       'Created': new Date(l.createdAt).toLocaleDateString('en-IN'),
     }));
@@ -84,12 +94,27 @@ const Leads = () => {
   return (
     <Layout>
       {/* Page Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Lead Management</h1>
           <p className="text-sm text-gray-500 mt-0.5">Track and manage your sales pipeline</p>
         </div>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex flex-wrap gap-2 items-center">
+          {isAdmin && (
+            <div className="flex items-center gap-2 mr-2 bg-white border border-gray-200 rounded-lg px-2 py-1.5 shadow-sm">
+              <Users size={16} className="text-gray-400 ml-1" />
+              <select 
+                value={filters.assignedToId || ''} 
+                onChange={e => { setFilters({ assignedToId: e.target.value }); fetchLeads(); }}
+                className="text-sm outline-none bg-transparent font-medium text-gray-700 pr-1"
+              >
+                <option value="">All Employees</option>
+                {[...users].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
+                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <button
             id="import-leads-btn"
             onClick={() => setShowImportModal(true)}
@@ -148,6 +173,7 @@ const Leads = () => {
               <tr>
                 <th className="px-4 py-3 w-10">#</th>
                 <th className="px-4 py-3">Lead / Customer</th>
+                <th className="px-4 py-3">Assigned To</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Created</th>
               </tr>
@@ -161,6 +187,9 @@ const Leads = () => {
                   <td className="px-4 py-3">
                     <div className="font-medium text-gray-900">{lead.title}</div>
                     <div className="text-xs text-gray-500">{lead.customer?.contactName} • {lead.customer?.phone}</div>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-600 font-medium">
+                    {lead.assignedTo ? `${lead.assignedTo.firstName} ${lead.assignedTo.lastName}` : 'Unassigned'}
                   </td>
                   <td className="px-4 py-3"><span className="text-xs font-bold text-gray-600 bg-gray-100 px-2 py-1 rounded">{lead.status.replace('_', ' ')}</span></td>
                   <td className="px-4 py-3 text-gray-500 text-xs">{new Date(lead.createdAt).toLocaleDateString()}</td>

@@ -73,12 +73,14 @@ export default function SalesTargets() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-5 flex gap-3 flex-wrap">
-        <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
-          <option value="">All Employees</option>
-          {[...employees].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
-            <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-          ))}
-        </select>
+        {user?.role === 'ADMIN' && (
+          <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
+            <option value="">All Employees</option>
+            {[...employees].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
+              <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+            ))}
+          </select>
+        )}
         <select value={sortByEmployee} onChange={e => setSortByEmployee(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
           <option value="">Sort By</option>
           <option value="asc">Employee (A-Z)</option>

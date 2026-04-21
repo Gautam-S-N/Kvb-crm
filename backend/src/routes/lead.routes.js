@@ -16,7 +16,7 @@ router.put('/:id', leadController.updateLead);
 router.delete('/:id', authorize('ADMIN'), leadController.deleteLead);
 
 // Lead assignment
-router.post('/:id/assign', authorize('ADMIN', 'EMPLOYEE'), leadController.assignLead);
+router.post('/:id/assign', authorize('ADMIN'), leadController.assignLead);
 
 // Lead Notes tracking
 router.post('/:id/notes', leadController.addNote);

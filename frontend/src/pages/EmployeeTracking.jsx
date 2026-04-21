@@ -9,6 +9,8 @@ import {
   Users, CheckCircle2, Clock, AlertTriangle, TrendingUp,
   ChevronDown, ChevronUp, Loader2, ListChecks
 } from 'lucide-react';
+import TaskDetailModal from '../components/TaskDetailModal';
+import { useTaskStore } from '../stores/taskStore';
 
 // ── Color palette ────────────────────────────────────────────
 const COLORS = {
@@ -148,13 +150,16 @@ function EmployeeCard({ stat, onExpand, expanded }) {
 }
 
 // ── Task Row inside expanded panel ───────────────────────────
-function TaskRow({ task }) {
+function TaskRow({ task, onClick }) {
   const sc = STATUS_COLORS[task.status] || 'bg-gray-100 text-gray-500';
   const pc = PRIORITY_COLORS[task.priority] || '';
   return (
-    <div className="flex items-center gap-3 py-2.5 px-4 border-b last:border-0 hover:bg-gray-50">
+    <div 
+      onClick={() => onClick(task.id)}
+      className="flex items-center gap-3 py-2.5 px-4 border-b last:border-0 hover:bg-gray-50 cursor-pointer group"
+    >
       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc} shrink-0`}>{task.status.replace('_', ' ')}</span>
-      <span className="flex-1 text-sm font-medium text-gray-800 truncate">{task.title}</span>
+      <span className="flex-1 text-sm font-medium text-gray-800 truncate group-hover:text-emerald-700 transition-colors">{task.title}</span>
       <span className={`text-xs font-bold ${pc} shrink-0`}>{task.priority}</span>
       <span className="text-xs text-gray-400 shrink-0">{new Date(task.dueDate).toLocaleDateString('en-IN')}</span>
     </div>
@@ -205,6 +210,9 @@ export default function EmployeeTracking() {
   const [expanded, setExpanded]     = useState(null); // employee id
   const [tasks, setTasks]           = useState([]);   // tasks for expanded employee
   const [loadingTasks, setLoadingTasks] = useState(false);
+  const [selectedTaskForDetail, setSelectedTaskForDetail] = useState(null);
+  
+  const { fetchTasks } = useTaskStore();
 
   useEffect(() => {
     (async () => {
@@ -332,7 +340,7 @@ export default function EmployeeTracking() {
                             <p className="text-center py-8 text-gray-400 text-sm">No tasks assigned.</p>
                           ) : (
                             <div className="max-h-64 overflow-y-auto">
-                              {tasks.map(t => <TaskRow key={t.id} task={t} />)}
+                              {tasks.map(t => <TaskRow key={t.id} task={t} onClick={setSelectedTaskForDetail} />)}
                             </div>
                           )}
                         </div>
@@ -345,6 +353,19 @@ export default function EmployeeTracking() {
           </>
         )}
       </div>
+
+      {selectedTaskForDetail && (
+        <TaskDetailModal
+          taskId={selectedTaskForDetail}
+          onClose={() => setSelectedTaskForDetail(null)}
+          onUpdate={() => { 
+            // Re-fetch everything to ensure stats and task list are in sync
+            fetchTasks(); 
+            handleExpand(expanded); // Re-fetch the expanded list
+            setSelectedTaskForDetail(null); 
+          }}
+        />
+      )}
     </Layout>
   );
 }

@@ -324,11 +324,11 @@ exports.getTaskStats = async (req, res) => {
 
     const stats = await Promise.all(employees.map(async (emp) => {
       const [total, completed, overdue, pending, inProgress] = await Promise.all([
-        prisma.task.count({ where: { assignedToId: emp.id } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'COMPLETED' } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'OVERDUE' } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'PENDING' } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS' } })
+        prisma.task.count({ where: { assignedToId: emp.id, type: 'TEAM' } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'COMPLETED', type: 'TEAM' } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'OVERDUE', type: 'TEAM' } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'PENDING', type: 'TEAM' } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS', type: 'TEAM' } })
       ]);
 
       const score = total > 0 ? ((completed / total) * 100).toFixed(1) : '0.0';

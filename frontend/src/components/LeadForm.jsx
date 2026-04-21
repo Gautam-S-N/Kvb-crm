@@ -1,11 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useLeadStore } from '../stores/leadStore';
 import { useProductStore } from '../stores/productStore';
-import { Search, X, Package } from 'lucide-react';
+import { useUserStore } from '../stores/userStore';
+import { useAuthStore } from '../stores/authStore';
+import { Search, X, Package, UserPlus } from 'lucide-react';
 
 const LeadForm = ({ onClose, onSuccess }) => {
   const { createLead, checkDuplicate, isLoading, error, clearError } = useLeadStore();
   const { products, fetchProducts } = useProductStore();
+  const { users, fetchUsers } = useUserStore();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === 'ADMIN';
+
   const [duplicateWarning, setDuplicateWarning] = useState(null);
   const [productSearch, setProductSearch] = useState('');
   const [showProductPicker, setShowProductPicker] = useState(false);
@@ -26,12 +32,14 @@ const LeadForm = ({ onClose, onSuccess }) => {
     customerAddress: '',
     customerCity: '',
     customerState: '',
-    customerPincode: ''
+    customerPincode: '',
+    assignedToId: ''
   });
 
   useEffect(() => {
     fetchProducts();
-  }, []);
+    if (isAdmin) fetchUsers();
+  }, [isAdmin]);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -136,6 +144,18 @@ const LeadForm = ({ onClose, onSuccess }) => {
               <input type="number" name="estimateAmount" value={formData.estimateAmount} onChange={handleChange}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm" />
             </div>
+            {isAdmin && (
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">Assigned To</label>
+                <select name="assignedToId" value={formData.assignedToId} onChange={handleChange}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm">
+                  <option value="">Unassigned</option>
+                  {[...users].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
+                    <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Customer Info */}

@@ -4,7 +4,6 @@ const todoController = require('../controllers/todo.controller');
 const { authMiddleware, authorize } = require('../middleware/auth.middleware');
 
 router.use(authMiddleware);
-router.use(authorize('ADMIN'));
 
 router.get('/',                              todoController.getTodos);
 router.post('/',                             todoController.createTodo);

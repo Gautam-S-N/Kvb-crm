@@ -167,8 +167,8 @@ exports.getLeadById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
     
-    // Check permissions
-    if (req.user.role === 'EMPLOYEE' && lead.assignedToId !== req.user.id && lead.createdById !== req.user.id) {
+    // Check permissions — employees can only view leads assigned to them
+    if (req.user.role === 'EMPLOYEE' && lead.assignedToId !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
@@ -295,7 +295,8 @@ exports.createLead = async (req, res) => {
         closeDate: closeDate ? new Date(closeDate) : null,
         customerId,
         createdById: req.user.id,
-        assignedToId: assignedToId || req.user.id,
+        // Employees always own their leads; admins can assign to others
+        assignedToId: req.user.role === 'EMPLOYEE' ? req.user.id : (assignedToId || req.user.id),
         // Add products if provided
         products: products?.length ? {
           create: products.map(p => ({

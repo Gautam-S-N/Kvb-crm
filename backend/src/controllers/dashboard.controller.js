@@ -34,13 +34,10 @@ exports.getDashboardMetrics = async (req, res) => {
       _sum: { totalAmount: true }
     });
 
-    // Get pending tasks — only TEAM type matches what the Tasks page shows
-    const pendingTasks = await prisma.task.count({
-      where: {
-        type: 'TEAM',
-        status: { in: ['PENDING', 'IN_PROGRESS'] }
-      }
-    });
+    // Get pending tasks — scoped to employee's own assigned tasks
+    const taskWhere = { type: 'TEAM', status: { in: ['PENDING', 'IN_PROGRESS'] } };
+    if (userRole === 'EMPLOYEE') taskWhere.assignedToId = userId;
+    const pendingTasks = await prisma.task.count({ where: taskWhere });
 
     // Format lead stats
     const stats = {

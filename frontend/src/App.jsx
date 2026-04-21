@@ -62,7 +62,7 @@ function App() {
         <Route path="/sales"       element={<PrivateRoute element={<Sales />} />} />
         <Route path="/sales/new"   element={<PrivateRoute element={<CreateSale />} />} />
         <Route path="/sales/:id"   element={<PrivateRoute element={<SaleDetail />} />} />
-        <Route path="/products"    element={<PrivateRoute element={<Products />} />} />
+        <Route path="/products"    element={<PrivateRoute element={<Products />} roles={['ADMIN']} />} />
         <Route path="/vendors"     element={<PrivateRoute element={<Vendors />} roles={['ADMIN']} />} />
         <Route path="/purchase"    element={<PrivateRoute element={<PurchaseOrders />} roles={['ADMIN']} />} />
         <Route path="/purchase/new" element={<PrivateRoute element={<CreatePurchaseOrder />} roles={['ADMIN']} />} />
@@ -77,7 +77,7 @@ function App() {
         
         <Route path="/users"         element={<PrivateRoute element={<UserManagement />} roles={['ADMIN']} />} />
         <Route path="/settings"      element={<PrivateRoute element={<Settings />} roles={['ADMIN']} />} />
-        <Route path="/todo-list"           element={<PrivateRoute element={<TodoList />} roles={['ADMIN']} />} />
+        <Route path="/todo-list"           element={<PrivateRoute element={<TodoList />} roles={['ADMIN', 'EMPLOYEE']} />} />
         <Route path="/employee-tracking"   element={<PrivateRoute element={<EmployeeTracking />} roles={['ADMIN']} />} />
 
         {/* Default */}

@@ -9,6 +9,7 @@ import {
   Mic, Clock, User, CheckCircle2, XCircle, Image,
   AlertTriangle, ChevronDown, Filter
 } from 'lucide-react';
+import TaskDetailModal from '../components/TaskDetailModal';
 
 const STATUS_COLORS = {
   PENDING:     'bg-yellow-100 text-yellow-800 border-yellow-200',
@@ -62,6 +63,9 @@ export default function Tasks() {
   const [failReason, setFailReason]  = useState('');
   const [failVoice,  setFailVoice]   = useState(null);
   const [failing,    setFailing]     = useState(false);
+
+  // Detail Modal
+  const [selectedTaskForDetail, setSelectedTaskForDetail] = useState(null);
 
   useEffect(() => {
     fetchTasks();
@@ -153,19 +157,23 @@ export default function Tasks() {
               <option key={s} value={s}>{s.replace('_',' ')}</option>
             )}
           </select>
-          <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)}
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
-            <option value="">All Employees</option>
-            {[...employees].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
-              <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-            ))}
-          </select>
-          <select value={sortByEmployee} onChange={e => setSortByEmployee(e.target.value)}
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
-            <option value="">Sort By</option>
-            <option value="asc">Employee (A-Z)</option>
-            <option value="desc">Employee (Z-A)</option>
-          </select>
+          {isAdmin && (
+            <>
+              <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
+                <option value="">All Employees</option>
+                {[...employees].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
+                  <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                ))}
+              </select>
+              <select value={sortByEmployee} onChange={e => setSortByEmployee(e.target.value)}
+                className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
+                <option value="">Sort By</option>
+                <option value="asc">Employee (A-Z)</option>
+                <option value="desc">Employee (Z-A)</option>
+              </select>
+            </>
+          )}
           <button type="submit"
             className="px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white text-sm rounded-lg font-medium transition-colors flex items-center gap-2">
             <Filter size={14} /> Filter
@@ -201,7 +209,9 @@ export default function Tasks() {
 
             return (
               <div key={task.id}
-                className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex flex-col hover:shadow-md transition-all duration-200">
+                onClick={() => setSelectedTaskForDetail(task.id)}
+                className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 flex flex-col hover:shadow-md transition-all duration-200 cursor-pointer"
+              >
 
                 {/* Status + Priority row */}
                 <div className="flex justify-between items-center mb-3">
@@ -283,11 +293,11 @@ export default function Tasks() {
                 {/* Action buttons — only for assignee or admin, only if task is active */}
                 {canAct && isPending && (
                   <div className="flex gap-2 mt-auto">
-                    <button onClick={() => setCompleteTask_(task)}
+                    <button onClick={(e) => { e.stopPropagation(); setCompleteTask_(task); }}
                       className="flex-1 py-2 bg-green-50 text-green-700 hover:bg-green-100 text-xs font-bold rounded-lg transition-colors border border-green-200 flex items-center justify-center gap-1.5">
                       <CheckCircle2 size={14} /> Mark Complete
                     </button>
-                    <button onClick={() => setFailTask_(task)}
+                    <button onClick={(e) => { e.stopPropagation(); setFailTask_(task); }}
                       className="flex-1 py-2 bg-red-50 text-red-700 hover:bg-red-100 text-xs font-bold rounded-lg transition-colors border border-red-200 flex items-center justify-center gap-1.5">
                       <XCircle size={14} /> Can't Complete
                     </button>
@@ -323,17 +333,22 @@ export default function Tasks() {
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none" />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-gray-700 block mb-1">Assign To *</label>
-                  <select required value={assignForm.assignedToId}
-                    onChange={e => setAssignForm({ ...assignForm, assignedToId: e.target.value })}
-                    className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
-                    <option value="">-- Select Employee --</option>
-                    {employees.map(u => (
-                      <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-                    ))}
-                  </select>
-                </div>
+                {isAdmin ? (
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">Assign To *</label>
+                    <select required value={assignForm.assignedToId}
+                      onChange={e => setAssignForm({ ...assignForm, assignedToId: e.target.value })}
+                      className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+                      <option value="">-- Select Employee --</option>
+                      {employees.map(u => (
+                        <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  /* Employees always self-assign — set hidden value on mount */
+                  <input type="hidden" value={user?.id || ''} ref={el => { if (el && !assignForm.assignedToId) setAssignForm(f => ({ ...f, assignedToId: user?.id || '' })); }} />
+                )}
                 <div>
                   <label className="text-xs font-bold text-gray-700 block mb-1">Priority</label>
                   <select value={assignForm.priority}
@@ -455,6 +470,14 @@ export default function Tasks() {
             </form>
           </div>
         </div>
+      )}
+      {/* ── DETAIL MODAL ── */}
+      {selectedTaskForDetail && (
+        <TaskDetailModal
+          taskId={selectedTaskForDetail}
+          onClose={() => setSelectedTaskForDetail(null)}
+          onUpdate={() => { fetchTasks(); setSelectedTaskForDetail(null); }}
+        />
       )}
     </Layout>
   );
