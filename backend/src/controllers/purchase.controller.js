@@ -289,6 +289,7 @@ exports.getPurchaseOrders = async (req, res) => {
         include: {
           vendor: { select: { id: true, companyName: true, contactName: true } },
           createdBy: { select: { id: true, firstName: true, lastName: true } },
+          items: { orderBy: { id: 'asc' } },
           _count: { select: { items: true } }
         },
         orderBy: { createdAt: 'desc' },
@@ -315,7 +316,7 @@ exports.getPurchaseOrderById = async (req, res) => {
       include: {
         vendor: true,
         createdBy: { select: { id: true, firstName: true, lastName: true } },
-        items: true
+        items: { orderBy: { id: 'asc' } }
       }
     });
     if (!po) return res.status(404).json({ success: false, message: 'Purchase order not found' });
@@ -393,7 +394,7 @@ exports.createPurchaseOrder = async (req, res) => {
         items: { create: poItems }
       },
       include: {
-        items: true,
+        items: { orderBy: { id: 'asc' } },
         createdBy: { select: { id: true, firstName: true, lastName: true } }
       }
     });
@@ -407,24 +408,83 @@ exports.createPurchaseOrder = async (req, res) => {
 // PUT /api/purchase/:id
 exports.updatePurchaseOrder = async (req, res) => {
   try {
-    const { status, notes, receivedDate } = req.body;
+    const {
+      status, receivedDate,
+      poNumber, vendorName, vendorGstin, vendorAddress, vendorPinCode, vendorPhone,
+      shipAddress, shipPinCode, shipMNo, shipGstin,
+      shippingMethod, gstRate, roundOff, comments,
+      items, expectedDate
+    } = req.body;
+
     const existingPO = await prisma.purchaseOrder.findUnique({
       where: { id: req.params.id },
-      include: { items: true }
+      include: { items: { orderBy: { id: 'asc' } } }
     });
     if (!existingPO) return res.status(404).json({ success: false, message: 'Purchase order not found' });
 
+    let updateData = {};
+    if (status) updateData.status = status;
+    if (receivedDate) updateData.receivedDate = new Date(receivedDate);
+
+    if (items && Array.isArray(items)) {
+      let subTotal = 0;
+      const poItems = items.map(item => {
+        const total = item.quantity * item.unitPrice;
+        subTotal += total;
+        return {
+          itemName: item.itemName,
+          description: item.description || null,
+          hsnCode: item.hsnCode || null,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          totalPrice: total
+        };
+      });
+
+      const parsedGstRate = gstRate !== undefined ? parseFloat(gstRate) : 18;
+      const rnd = roundOff !== undefined ? parseFloat(roundOff) : 0;
+      const gstAmt = parseFloat((subTotal * parsedGstRate / 100).toFixed(2));
+      const totalAmount = parseFloat((subTotal + gstAmt + rnd).toFixed(2));
+
+      const notes = JSON.stringify({
+        vendorName:    vendorName    || '',
+        vendorGstin:   vendorGstin   || '',
+        vendorAddress: vendorAddress || '',
+        vendorPinCode: vendorPinCode || '',
+        vendorPhone:   vendorPhone   || '',
+        shipAddress:   shipAddress   || 'R16, KSSIDC, 3rd Cross, Belur Industrial Estate, Dharwad',
+        shipPinCode:   shipPinCode   || '580 031',
+        shipMNo:       shipMNo       || '95455 29950',
+        shipGstin:     shipGstin     || '29AAXFK4926A1Z0',
+        shippingMethod: shippingMethod || 'Door Delivery',
+        comments:      comments || 'Digitally created, signature not required',
+        gstRate:       parsedGstRate,
+        roundOff:      rnd,
+      });
+
+      updateData = {
+        ...updateData,
+        poNumber: poNumber || existingPO.poNumber,
+        subTotal, taxAmount: gstAmt, totalAmount,
+        expectedDate: expectedDate ? new Date(expectedDate) : null,
+        notes,
+        items: {
+          deleteMany: {},
+          create: poItems
+        }
+      };
+    } else if (req.body.notes !== undefined) {
+      updateData.notes = req.body.notes;
+    }
+
     const updated = await prisma.purchaseOrder.update({
       where: { id: req.params.id },
-      data: {
-        ...(status && { status }),
-        ...(notes !== undefined && { notes }),
-        ...(receivedDate && { receivedDate: new Date(receivedDate) })
-      }
+      data: updateData,
+      include: { items: { orderBy: { id: 'asc' } } }
     });
 
     if (status === 'RECEIVED' && existingPO.status !== 'RECEIVED') {
-      for (const item of existingPO.items) {
+      for (const item of updated.items) {
         if (item.materialId) {
           await prisma.material.update({
             where: { id: item.materialId },
@@ -445,7 +505,7 @@ const loadPO = (id) => prisma.purchaseOrder.findUnique({
   where: { id },
   include: {
     vendor: true,
-    items: true,
+    items: { orderBy: { id: 'asc' } },
     createdBy: { select: { id: true, firstName: true, lastName: true } }
   }
 });

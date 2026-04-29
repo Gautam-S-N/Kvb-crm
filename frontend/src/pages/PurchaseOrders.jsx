@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { usePurchaseStore } from '../stores/purchaseStore';
-import { Plus, Search, Filter, FileText, FileSpreadsheet, File, Truck, ShoppingBag } from 'lucide-react';
+import { Plus, Search, Filter, FileText, FileSpreadsheet, File, Truck, ShoppingBag, Edit } from 'lucide-react';
 
 const STATUS_COLORS = {
   PENDING:   'bg-yellow-100 text-yellow-800',
@@ -162,6 +162,14 @@ export default function PurchaseOrders() {
                           className="flex items-center gap-1 px-2 py-1 text-xs bg-red-50 hover:bg-red-100 text-red-700 rounded transition-colors font-medium"
                         >
                           <File size={13} /> PDF
+                        </button>
+
+                        <button
+                          onClick={() => navigate(`/purchase/edit/${po.id}`)}
+                          title="Edit PO"
+                          className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 rounded transition-colors font-medium"
+                        >
+                          <Edit size={13} /> Edit
                         </button>
 
                         <button

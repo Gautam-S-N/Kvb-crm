@@ -3,18 +3,20 @@ import Layout from '../components/Layout';
 import { useTargetStore } from '../stores/targetStore';
 import { useAuthStore } from '../stores/authStore';
 import api from '../services/api';
-import { Target, TrendingUp, Award, Plus, RefreshCw, Trophy } from 'lucide-react';
+import { Target, TrendingUp, Award, Plus, RefreshCw, Trophy, Edit2 } from 'lucide-react';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export default function SalesTargets() {
   const { user } = useAuthStore();
-  const { targets, isLoading, fetchTargets, createTarget, refreshAttainment } = useTargetStore();
+  const { targets, isLoading, fetchTargets, createTarget, updateTarget, refreshAttainment } = useTargetStore();
   
   const [employees, setEmployees] = useState([]);
   const [employeeFilter, setEmployeeFilter] = useState('');
   const [sortByEmployee, setSortByEmployee] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editId, setEditId] = useState(null);
   const [formData, setFormData] = useState({
     employeeId: '',
     periodType: 'MONTHLY',
@@ -33,10 +35,55 @@ export default function SalesTargets() {
     }
   }, []);
 
-  const handleCreate = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const res = await createTarget(formData);
-    if (res.success) setShowModal(false);
+    let res;
+    if (isEditing) {
+      res = await updateTarget(editId, formData);
+    } else {
+      res = await createTarget(formData);
+    }
+    if (res.success) {
+      setShowModal(false);
+      setIsEditing(false);
+      setEditId(null);
+    }
+  };
+
+  const handleEdit = (t) => {
+    setFormData({
+      employeeId: t.employeeId,
+      periodType: t.periodType,
+      periodYear: t.periodYear,
+      periodNumber: t.periodNumber,
+      revenueTarget: Number(t.revenueTarget),
+      leadsTarget: t.leadsTarget,
+      quotationsTarget: t.quotationsTarget,
+      notes: t.notes || '',
+      isRecurring: !!t.isRecurring,
+      reminderAt: t.reminderAt ? new Date(new Date(t.reminderAt).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''
+    });
+    setEditId(t.id);
+    setIsEditing(true);
+    setShowModal(true);
+  };
+
+  const openCreateModal = () => {
+    setFormData({
+      employeeId: '',
+      periodType: 'MONTHLY',
+      periodYear: new Date().getFullYear(),
+      periodNumber: new Date().getMonth() + 1,
+      revenueTarget: 1000000, // Default 10L
+      leadsTarget: 100,
+      quotationsTarget: 50,
+      notes: '',
+      isRecurring: false,
+      reminderAt: ''
+    });
+    setIsEditing(false);
+    setEditId(null);
+    setShowModal(true);
   };
 
   const handleRefresh = async () => {
@@ -65,7 +112,7 @@ export default function SalesTargets() {
             </button>
           )}
           {user?.role === 'ADMIN' && (
-            <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg">
+            <button onClick={openCreateModal} className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg">
               <Plus size={18} /> New Target
             </button>
           )}
@@ -106,6 +153,11 @@ export default function SalesTargets() {
             <div key={t.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
               {isWinner && <div className="absolute top-0 right-0 p-2 bg-yellow-100 text-yellow-600 rounded-bl-xl"><Trophy size={20} /></div>}
               {t.isRecurring && <div className="absolute bottom-0 right-0 p-1.5 bg-blue-50 text-blue-500 text-[10px] font-bold px-3 rounded-tl-xl border-t border-l border-blue-100 uppercase tracking-tighter">Recurring</div>}
+              {user?.role === 'ADMIN' && (
+                <button onClick={() => handleEdit(t)} className="absolute top-2 right-12 p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors z-10" title="Edit Target">
+                  <Edit2 size={16} />
+                </button>
+              )}
               
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-lg">
@@ -153,10 +205,10 @@ export default function SalesTargets() {
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between">
-              <h2 className="font-bold text-lg">Set Sales Target</h2>
+              <h2 className="font-bold text-lg">{isEditing ? 'Edit Sales Target' : 'Set Sales Target'}</h2>
               <button onClick={() => setShowModal(false)} className="text-gray-400">✕</button>
             </div>
-            <form onSubmit={handleCreate} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
                 <label className="text-xs font-semibold block mb-1">Employee</label>
                 <select required value={formData.employeeId} onChange={e=>setFormData({...formData,employeeId:e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm">
@@ -211,7 +263,9 @@ export default function SalesTargets() {
                 <input type="datetime-local" value={formData.reminderAt} onChange={e=>setFormData({...formData,reminderAt:e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" />
               </div>
 
-              <button disabled={isLoading} type="submit" className="w-full py-2 bg-green-600 text-white font-semibold rounded-lg mt-4 disabled:opacity-50">Save Target</button>
+              <button disabled={isLoading} type="submit" className="w-full py-2 bg-green-600 text-white font-semibold rounded-lg mt-4 disabled:opacity-50">
+                {isEditing ? 'Update Target' : 'Save Target'}
+              </button>
             </form>
           </div>
         </div>

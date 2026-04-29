@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { usePurchaseStore } from '../stores/purchaseStore';
 import { ArrowLeft, Save, Plus, Trash2 } from 'lucide-react';
@@ -10,8 +10,9 @@ const YN = 'w-full bg-yellow-100 border-0 outline-none text-sm px-1 py-0 text-ce
 const YR = 'w-full bg-yellow-100 border-0 outline-none text-sm px-1 py-0 text-right placeholder-yellow-400 focus:bg-yellow-200 transition-colors';
 
 export default function CreatePurchaseOrder() {
+  const { id } = useParams();
   const navigate = useNavigate();
-  const { createPurchaseOrder, isLoading } = usePurchaseStore();
+  const { createPurchaseOrder, updatePurchaseOrder, getPurchaseOrder, isLoading } = usePurchaseStore();
 
   // PO Header
   const today = new Date().toISOString().split('T')[0];
@@ -47,6 +48,46 @@ export default function CreatePurchaseOrder() {
 
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    if (id) {
+      getPurchaseOrder(id).then(po => {
+        if (po) {
+          setPoNumber(po.poNumber);
+          setPoDate(new Date(po.createdAt || po.orderDate).toISOString().split('T')[0]);
+          
+          let meta = {};
+          try { meta = JSON.parse(po.notes || '{}'); } catch(e){}
+          
+          setVendorName(meta.vendorName || (po.vendor?.companyName !== '__MANUAL_ENTRY__' ? po.vendor?.companyName : '') || '');
+          setVendorGstin(meta.vendorGstin || '');
+          setVendorAddress(meta.vendorAddress || '');
+          setVendorPinCode(meta.vendorPinCode || '');
+          setVendorPhone(meta.vendorPhone || '');
+          
+          if (meta.shipAddress) setShipAddress(meta.shipAddress);
+          if (meta.shipPinCode) setShipPinCode(meta.shipPinCode);
+          if (meta.shipMNo) setShipMNo(meta.shipMNo);
+          if (meta.shipGstin) setShipGstin(meta.shipGstin);
+          
+          if (meta.shippingMethod) setShippingMethod(meta.shippingMethod);
+          if (po.expectedDate) setDeliveryDate(new Date(po.expectedDate).toISOString().split('T')[0]);
+          
+          if (meta.gstRate !== undefined) setGstRate(meta.gstRate);
+          if (meta.roundOff !== undefined) setRoundOff(meta.roundOff);
+          
+          if (po.items && po.items.length > 0) {
+            setItems(po.items.map(it => ({
+              itemName: it.itemName || '',
+              hsnCode: it.hsnCode || '',
+              quantity: it.quantity || '',
+              unitPrice: it.unitPrice || ''
+            })));
+          }
+        }
+      });
+    }
+  }, [id, getPurchaseOrder]);
+
   const addItem    = () => setItems([...items, { itemName: '', hsnCode: '', quantity: '', unitPrice: '' }]);
   const removeItem = (i) => items.length > 1 && setItems(items.filter((_, idx) => idx !== i));
   const upd = (i, f, v) => { const n = [...items]; n[i][f] = v; setItems(n); };
@@ -62,7 +103,7 @@ export default function CreatePurchaseOrder() {
     if (!vendorName.trim()) { setError('Please enter vendor company name'); return; }
     if (items.some(it => !it.itemName.trim())) { setError('All items must have a name'); return; }
 
-    const res = await createPurchaseOrder({
+    const payload = {
       poNumber: poNumber.trim() || undefined,
       vendorName, vendorGstin, vendorAddress, vendorPinCode, vendorPhone,
       shipAddress, shipPinCode, shipMNo, shipGstin: '29AAXFK4926A1Z0',
@@ -75,10 +116,17 @@ export default function CreatePurchaseOrder() {
         quantity: +it.quantity || 0,
         unitPrice: +it.unitPrice || 0,
       }))
-    });
+    };
+
+    let res;
+    if (id) {
+      res = await updatePurchaseOrder(id, payload);
+    } else {
+      res = await createPurchaseOrder(payload);
+    }
 
     if (res.success) navigate('/purchase');
-    else setError(res.error || 'Failed to create PO');
+    else setError(res.error || `Failed to ${id ? 'update' : 'create'} PO`);
   };
 
   const cell = 'border border-gray-400 px-2 py-1';
@@ -91,7 +139,7 @@ export default function CreatePurchaseOrder() {
           <ArrowLeft size={20} />
         </button>
         <div>
-          <h1 className="text-xl font-bold text-gray-900">New Purchase Order</h1>
+          <h1 className="text-xl font-bold text-gray-900">{id ? 'Edit' : 'New'} Purchase Order</h1>
           <p className="text-xs text-gray-400">Yellow fields are editable</p>
         </div>
       </div>
@@ -369,7 +417,7 @@ export default function CreatePurchaseOrder() {
         <div className="max-w-4xl mx-auto mt-4 flex justify-end">
           <button type="submit" disabled={isLoading}
             className="flex items-center gap-2 px-6 py-3 bg-blue-700 hover:bg-blue-800 text-white font-bold rounded-lg shadow transition-colors disabled:opacity-60">
-            {isLoading ? 'Saving...' : <><Save size={18} /> Save &amp; Generate PO</>}
+            {isLoading ? 'Saving...' : <><Save size={18} /> {id ? 'Update PO' : 'Save & Generate PO'}</>}
           </button>
         </div>
       </form>
