@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { useQuotationStore } from '../stores/quotationStore';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
 import {
   FileText, Download, RefreshCw, Search, ArrowRight,
-  CheckCircle, Clock, Send, XCircle, ChevronLeft, ChevronRight
+  CheckCircle, Clock, Send, XCircle, ChevronLeft, ChevronRight, ChevronDown
 } from 'lucide-react';
 
 const STATUS_META = {
@@ -24,15 +24,22 @@ const fmtDate = (d) =>
 
 export default function Quotations() {
   const navigate = useNavigate();
-  const { quotations, isLoading, pagination, fetchQuotations, downloadPDF, downloadDOCX, convertToSale } = useQuotationStore();
+  const { quotations, productSummary, isLoading, pagination, fetchQuotations, fetchProductSummary, downloadPDF, downloadDOCX, convertToSale } = useQuotationStore();
   const { user } = useAuthStore();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'products'
+  const [expandedProducts, setExpandedProducts] = useState({});
   const [converting, setConverting] = useState(null);
   const isAdmin = user?.role === 'ADMIN';
 
+  const toggleProduct = (idx) => {
+    setExpandedProducts(prev => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
   useEffect(() => {
     fetchQuotations();
+    fetchProductSummary();
   }, []);
 
   const handleSearch = (e) => {
@@ -120,7 +127,88 @@ export default function Quotations() {
         </form>
       </div>
 
-      {/* Table */}
+    {/* View Toggle */}
+      <div className="flex gap-4 mb-4 border-b border-gray-200 dark:border-gray-700">
+        <button
+          onClick={() => setViewMode('list')}
+          className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${viewMode === 'list' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+        >
+          All Quotations
+        </button>
+        <button
+          onClick={() => setViewMode('products')}
+          className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${viewMode === 'products' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+        >
+          Product Summary
+        </button>
+      </div>
+
+      {viewMode === 'products' ? (
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-40">
+              <div className="animate-spin w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full" />
+            </div>
+          ) : productSummary?.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-40 text-gray-400">
+              <FileText size={36} className="mb-2 opacity-40" />
+              <p>No product data found</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-700">
+                    <th className="text-left px-4 py-3 font-semibold text-gray-500">Product Name</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-500">HSN Code</th>
+                    <th className="text-center px-4 py-3 font-semibold text-gray-500">Times Quoted</th>
+                    <th className="text-center px-4 py-3 font-semibold text-gray-500">Total Qty</th>
+                    <th className="text-right px-4 py-3 font-semibold text-gray-500">Total Value (Earnings)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                  {productSummary?.map((p, idx) => (
+                    <React.Fragment key={idx}>
+                      <tr onClick={() => toggleProduct(idx)} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer">
+                        <td className="px-4 py-3 font-medium text-gray-900 dark:text-white flex items-center gap-2">
+                          {expandedProducts[idx] ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+                          {p.productName}
+                        </td>
+                        <td className="px-4 py-3 text-gray-500">{p.hsnCode || '—'}</td>
+                        <td className="px-4 py-3 text-center text-gray-600 font-bold">{p.totalQuotations}</td>
+                        <td className="px-4 py-3 text-center text-gray-600 font-bold">{p.totalQty}</td>
+                        <td className="px-4 py-3 text-right font-bold text-indigo-600 dark:text-indigo-400">{fmtMoney(p.totalValue)}</td>
+                      </tr>
+                      {expandedProducts[idx] && p.documents?.length > 0 && (
+                        <tr className="bg-gray-50 dark:bg-gray-900/30">
+                          <td colSpan="5" className="px-8 py-3 border-t border-gray-100 dark:border-gray-700">
+                            <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wider">Quotations including this product</div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                              {p.documents.map(doc => (
+                                <div key={doc.id} onClick={() => { setViewMode('list'); setSearch(doc.number); fetchQuotations({ search: doc.number }); }} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 p-3 rounded-lg shadow-sm cursor-pointer hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="font-bold text-indigo-600 dark:text-indigo-400">{doc.number}</span>
+                                    <span className="text-gray-400 text-xs">{fmtDate(doc.date)}</span>
+                                  </div>
+                                  <div className="text-gray-800 dark:text-gray-200 font-medium mb-1 truncate">{doc.customer}</div>
+                                  <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-2 border-t border-gray-100 dark:border-gray-700 pt-2">
+                                    <span>Qty: <span className="font-semibold">{doc.qty}</span></span>
+                                    <span>Value: <span className="font-semibold">{fmtMoney(doc.value)}</span></span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center h-40">
@@ -265,6 +353,7 @@ export default function Quotations() {
           </div>
         )}
       </div>
+      )}
     </Layout>
   );
 }

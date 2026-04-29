@@ -5,6 +5,7 @@ const { authMiddleware } = require('../middleware/auth.middleware');
 
 router.use(authMiddleware);
 
+router.get('/product-summary', quotationController.getQuotationsByProduct);
 router.get('/', quotationController.getQuotations);
 router.post('/', quotationController.createQuotation);
 router.get('/:id', quotationController.getQuotationById);

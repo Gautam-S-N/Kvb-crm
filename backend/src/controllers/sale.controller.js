@@ -905,3 +905,72 @@ exports.generateInvoice = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// GET /api/sales/product-summary
+// Returns each product with: totalSales count, totalQty, totalRevenue
+exports.getSalesByProduct = async (req, res) => {
+  try {
+    const where = {};
+    if (req.user.role === 'EMPLOYEE') where.sale = { createdById: req.user.id };
+
+    const items = await prisma.saleItem.findMany({
+      where,
+      include: {
+        product: { select: { id: true, name: true, hsnCode: true } },
+        sale: { 
+          select: { 
+            id: true, 
+            saleNumber: true, 
+            saleDate: true, 
+            totalAmount: true, 
+            status: true, 
+            paymentStatus: true,
+            customer: { select: { contactName: true } }
+          } 
+        }
+      }
+    });
+
+    // Group by product
+    const map = new Map();
+    for (const item of items) {
+      const key = item.productId;
+      const productName = item.product?.name || 'Unknown';
+      const hsnCode = item.product?.hsnCode || '';
+      if (!map.has(key)) {
+        map.set(key, {
+          productId: key,
+          productName,
+          hsnCode,
+          totalSales: 0,
+          totalQty: 0,
+          totalRevenue: 0,
+          documents: []
+        });
+      }
+      const entry = map.get(key);
+      entry.totalSales += 1;
+      entry.totalQty += Number(item.quantity);
+      entry.totalRevenue += Number(item.totalPrice);
+      
+      // Keep track of which sales contributed to this product
+      if (item.sale) {
+        entry.documents.push({
+          id: item.sale.id,
+          number: item.sale.saleNumber,
+          date: item.sale.saleDate,
+          customer: item.sale.customer?.contactName || 'Unknown',
+          qty: Number(item.quantity),
+          value: Number(item.totalPrice)
+        });
+      }
+    }
+
+    const result = Array.from(map.values())
+      .sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

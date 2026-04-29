@@ -5,6 +5,7 @@ const { authMiddleware, authorize } = require('../middleware/auth.middleware');
 
 router.use(authMiddleware);
 
+router.get('/product-summary', saleController.getSalesByProduct);
 router.get('/', saleController.getSales);
 router.post('/', saleController.createSale);
 router.get('/:id', saleController.getSaleById);

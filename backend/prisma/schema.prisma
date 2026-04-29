@@ -606,6 +606,26 @@ model PurchaseOrder {
   @@map("purchase_orders")
 }
 
+// ============================================
+// PURCHASE ITEMS CATALOG
+// ============================================
+
+model PurchaseItem {
+  id          String   @id @default(uuid())
+  name        String
+  hsnCode     String?
+  description String?  @db.Text
+  unit        String   @default("Nos")
+  rate        Decimal  @default(0) @db.Decimal(15, 2)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  purchaseOrderItems PurchaseOrderItem[]
+
+  @@map("purchase_items")
+}
+
 model PurchaseOrderItem {
   id              String        @id @default(uuid())
   purchaseOrderId String
@@ -613,6 +633,9 @@ model PurchaseOrderItem {
 
   materialId      String?
   material        Material?     @relation(fields: [materialId], references: [id])
+
+  purchaseItemId  String?
+  purchaseItem    PurchaseItem? @relation(fields: [purchaseItemId], references: [id])
 
   itemName        String
   description     String?       @db.Text

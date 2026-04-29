@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useSaleStore } from '../stores/saleStore';
 import { useAuthStore } from '../stores/authStore';
 import {
   Plus, Search, Filter, Eye, Download, IndianRupee,
-  RefreshCw, ShoppingCart, CheckCircle, Clock, AlertCircle, FileSpreadsheet
+  RefreshCw, ShoppingCart, CheckCircle, Clock, AlertCircle, FileSpreadsheet,
+  ChevronDown, ChevronRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -32,16 +33,23 @@ const fmtDate = (d) =>
 
 export default function Sales() {
   const navigate = useNavigate();
-  const { sales, isLoading, pagination, fetchSales, updateSale } = useSaleStore();
+  const { sales, productSummary, isLoading, pagination, fetchSales, fetchProductSummary, updateSale } = useSaleStore();
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'ADMIN';
 
   const [search, setSearch]               = useState('');
   const [statusFilter, setStatusFilter]   = useState('');
   const [paymentFilter, setPaymentFilter] = useState('');
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'products'
+  const [expandedProducts, setExpandedProducts] = useState({});
+
+  const toggleProduct = (idx) => {
+    setExpandedProducts(prev => ({ ...prev, [idx]: !prev[idx] }));
+  };
 
   useEffect(() => {
     fetchSales();
+    fetchProductSummary();
   }, []);
 
   const handleSearch = (e) => {
@@ -197,7 +205,88 @@ export default function Sales() {
         </form>
       </div>
 
-      {/* Table */}
+      {/* View Toggle */}
+      <div className="flex gap-4 mb-4 border-b border-gray-200">
+        <button
+          onClick={() => setViewMode('list')}
+          className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${viewMode === 'list' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          All Sales
+        </button>
+        <button
+          onClick={() => setViewMode('products')}
+          className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${viewMode === 'products' ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          Product Summary
+        </button>
+      </div>
+
+      {viewMode === 'products' ? (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          {isLoading ? (
+            <div className="flex items-center justify-center h-40">
+              <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full" />
+            </div>
+          ) : productSummary?.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-40 text-gray-400">
+              <ShoppingCart size={36} className="mb-2 opacity-40" />
+              <p>No product data found</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="text-left px-4 py-3 font-semibold text-gray-500">Product Name</th>
+                    <th className="text-left px-4 py-3 font-semibold text-gray-500">HSN Code</th>
+                    <th className="text-center px-4 py-3 font-semibold text-gray-500">Times Sold</th>
+                    <th className="text-center px-4 py-3 font-semibold text-gray-500">Total Qty</th>
+                    <th className="text-right px-4 py-3 font-semibold text-gray-500">Total Revenue (Earnings)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {productSummary?.map((p, idx) => (
+                    <React.Fragment key={idx}>
+                      <tr onClick={() => toggleProduct(idx)} className="hover:bg-gray-50 transition-colors cursor-pointer">
+                        <td className="px-4 py-3 font-medium text-gray-900 flex items-center gap-2">
+                          {expandedProducts[idx] ? <ChevronDown size={16} className="text-gray-400" /> : <ChevronRight size={16} className="text-gray-400" />}
+                          {p.productName}
+                        </td>
+                        <td className="px-4 py-3 text-gray-500">{p.hsnCode || '—'}</td>
+                        <td className="px-4 py-3 text-center text-gray-600 font-bold">{p.totalSales}</td>
+                        <td className="px-4 py-3 text-center text-gray-600 font-bold">{p.totalQty}</td>
+                        <td className="px-4 py-3 text-right font-bold text-green-600">{fmtMoney(p.totalRevenue)}</td>
+                      </tr>
+                      {expandedProducts[idx] && p.documents?.length > 0 && (
+                        <tr className="bg-gray-50">
+                          <td colSpan="5" className="px-8 py-4 border-t border-gray-100">
+                            <div className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wider">Sales including this product</div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                              {p.documents.map(doc => (
+                                <div key={doc.id} onClick={() => { setViewMode('list'); setSearch(doc.number); fetchSales({ search: doc.number }); }} className="bg-white border border-gray-200 p-3 rounded-lg shadow-sm cursor-pointer hover:border-green-400 transition-colors">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="font-bold text-green-600">{doc.number}</span>
+                                    <span className="text-gray-400 text-xs">{fmtDate(doc.date)}</span>
+                                  </div>
+                                  <div className="text-gray-800 font-medium mb-1 truncate">{doc.customer}</div>
+                                  <div className="flex justify-between text-xs text-gray-500 mt-2 border-t border-gray-100 pt-2">
+                                    <span>Qty: <span className="font-semibold text-gray-700">{doc.qty}</span></span>
+                                    <span>Value: <span className="font-semibold text-gray-700">{fmtMoney(doc.value)}</span></span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center h-40">
@@ -337,6 +426,7 @@ export default function Sales() {
           </div>
         )}
       </div>
+      )}
     </Layout>
   );
 }

@@ -14,6 +14,7 @@ import Products    from './pages/Products';
 import Vendors     from './pages/Vendors';
 import PurchaseOrders from './pages/PurchaseOrders';
 import CreatePurchaseOrder from './pages/CreatePurchaseOrder';
+import PurchaseItems from './pages/PurchaseItems';
 import Tasks       from './pages/Tasks';
 import DailyReports from './pages/DailyReports';
 import SalesTargets from './pages/SalesTargets';
@@ -67,6 +68,7 @@ function App() {
         <Route path="/purchase"    element={<PrivateRoute element={<PurchaseOrders />} roles={['ADMIN']} />} />
         <Route path="/purchase/new" element={<PrivateRoute element={<CreatePurchaseOrder />} roles={['ADMIN']} />} />
         <Route path="/purchase/edit/:id" element={<PrivateRoute element={<CreatePurchaseOrder />} roles={['ADMIN']} />} />
+        <Route path="/purchase/items" element={<PrivateRoute element={<PurchaseItems />} roles={['ADMIN']} />} />
         <Route path="/inventory"   element={<PrivateRoute element={<Inventory />} roles={['ADMIN']} />} />
         <Route path="/tasks"       element={<PrivateRoute element={<Tasks />} />} />
         <Route path="/daily-reports" element={<PrivateRoute element={<DailyReports />} />} />

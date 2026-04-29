@@ -63,6 +63,9 @@ export default function PurchaseOrders() {
           <p className="text-sm text-gray-500 mt-0.5">Manage POs and track incoming stock</p>
         </div>
         <div className="flex gap-3">
+          <Link to="/purchase/items" className="px-4 py-2 bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors">
+            Manage Items
+          </Link>
           <Link to="/vendors" className="px-4 py-2 bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors">
             Manage Vendors
           </Link>

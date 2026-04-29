@@ -3,6 +3,7 @@ import api from '../services/api';
 
 export const useSaleStore = create((set, get) => ({
   sales: [],
+  productSummary: [],
   currentSale: null,
   isLoading: false,
   error: null,
@@ -15,6 +16,16 @@ export const useSaleStore = create((set, get) => ({
       const query = new URLSearchParams({ page: pagination.page, limit: pagination.limit, ...params });
       const res = await api.get(`/sales?${query}`);
       set({ sales: res.data.data, pagination: res.data.pagination, isLoading: false });
+    } catch (err) {
+      set({ error: err.response?.data?.message, isLoading: false });
+    }
+  },
+
+  fetchProductSummary: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      const res = await api.get('/sales/product-summary');
+      set({ productSummary: res.data.data, isLoading: false });
     } catch (err) {
       set({ error: err.response?.data?.message, isLoading: false });
     }

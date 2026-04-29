@@ -1183,8 +1183,7 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
-
-    // â”€â”€ Standard quotation: fall back to html-to-docx â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Standard quotation: fall back to html-to-docx
     const html = buildStandardHTML(quotation);
     const htmlToDocx = require('html-to-docx');
     const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
@@ -1200,6 +1199,74 @@ exports.generateDOCX = async (req, res) => {
     res.send(docxBuffer);
   } catch (error) {
     console.error('generateDOCX error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+// GET /api/quotations/product-summary
+// Returns each product with: totalQuotations count, totalQty, totalValue
+exports.getQuotationsByProduct = async (req, res) => {
+  try {
+    const where = {};
+    if (req.user.role === 'EMPLOYEE') where.quotation = { createdById: req.user.id };
+
+    const items = await prisma.quotationItem.findMany({
+      where,
+      include: {
+        product: { select: { id: true, name: true, hsnCode: true } },
+        quotation: { 
+          select: { 
+            id: true, 
+            quotationNumber: true,
+            createdAt: true,
+            totalAmount: true, 
+            status: true,
+            customer: { select: { contactName: true } }
+          } 
+        }
+      }
+    });
+
+    // Group by product
+    const map = new Map();
+    for (const item of items) {
+      const key = item.productId;
+      const productName = item.product?.name || 'Unknown';
+      const hsnCode = item.product?.hsnCode || '';
+      if (!map.has(key)) {
+        map.set(key, {
+          productId: key,
+          productName,
+          hsnCode,
+          totalQuotations: 0,
+          totalQty: 0,
+          totalValue: 0,
+          documents: []
+        });
+      }
+      const entry = map.get(key);
+      entry.totalQuotations += 1;
+      entry.totalQty += Number(item.quantity);
+      entry.totalValue += Number(item.totalPrice);
+      
+      if (item.quotation) {
+        entry.documents.push({
+          id: item.quotation.id,
+          number: item.quotation.quotationNumber,
+          date: item.quotation.createdAt,
+          customer: item.quotation.customer?.contactName || 'Unknown',
+          qty: Number(item.quantity),
+          value: Number(item.totalPrice)
+        });
+      }
+    }
+
+    const result = Array.from(map.values())
+      .sort((a, b) => b.totalValue - a.totalValue);
+
+    res.json({ success: true, data: result });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };

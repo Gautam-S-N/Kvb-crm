@@ -4,6 +4,7 @@ import api from '../services/api';
 export const useQuotationStore = create((set, get) => ({
   quotations: [],
   leadQuotations: [],
+  productSummary: [],
   isLoading: false,
   error: null,
   pagination: { page: 1, limit: 20, total: 0, pages: 0 },
@@ -25,6 +26,16 @@ export const useQuotationStore = create((set, get) => ({
     try {
       const res = await api.get(`/quotations?leadId=${leadId}&limit=50`);
       set({ leadQuotations: res.data.data, isLoading: false });
+    } catch (error) {
+      set({ error: error.response?.data?.message, isLoading: false });
+    }
+  },
+
+  fetchProductSummary: async () => {
+    set({ isLoading: true, error: null });
+    try {
+      const res = await api.get('/quotations/product-summary');
+      set({ productSummary: res.data.data, isLoading: false });
     } catch (error) {
       set({ error: error.response?.data?.message, isLoading: false });
     }

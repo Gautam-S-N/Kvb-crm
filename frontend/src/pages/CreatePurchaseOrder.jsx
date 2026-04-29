@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { usePurchaseStore } from '../stores/purchaseStore';
+import { usePurchaseItemStore } from '../stores/purchaseItemStore';
 import { ArrowLeft, Save, Plus, Trash2 } from 'lucide-react';
 
 // Yellow cell input style — matches the PO yellow cells
@@ -13,37 +14,43 @@ export default function CreatePurchaseOrder() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { createPurchaseOrder, updatePurchaseOrder, getPurchaseOrder, isLoading } = usePurchaseStore();
+  const { items: catalogItems, fetchItems: fetchCatalogItems } = usePurchaseItemStore();
+
+  useEffect(() => { fetchCatalogItems(); }, []);
 
   // PO Header
   const today = new Date().toISOString().split('T')[0];
-  const fy = (() => { const y = new Date().getFullYear(); const m = new Date().getMonth(); return m >= 3 ? `${String(y).slice(2)}/${String(y+1).slice(2)}` : `${String(y-1).slice(2)}/${String(y).slice(2)}`; })();
-  const [poNumber,  setPoNumber]  = useState(`KVB-${fy}-`);
-  const [poDate,    setPoDate]    = useState(today);
+  const fy = (() => { const y = new Date().getFullYear(); const m = new Date().getMonth(); return m >= 3 ? `${String(y).slice(2)}/${String(y + 1).slice(2)}` : `${String(y - 1).slice(2)}/${String(y).slice(2)}`; })();
+  const [poNumber, setPoNumber] = useState(`KVB-${fy}-`);
+  const [poDate, setPoDate] = useState(today);
 
   // Vendor (left yellow — free text)
-  const [vendorName,    setVendorName]    = useState('');
-  const [vendorGstin,   setVendorGstin]   = useState('');
+  const [vendorName, setVendorName] = useState('');
+  const [vendorGstin, setVendorGstin] = useState('');
   const [vendorAddress, setVendorAddress] = useState('');
   const [vendorPinCode, setVendorPinCode] = useState('');
-  const [vendorPhone,   setVendorPhone]   = useState('');
+  const [vendorPhone, setVendorPhone] = useState('');
 
   // Ship To (right yellow — editable defaults)
-  const [shipAddress,   setShipAddress]   = useState('1st Floor, RHK Building, BVB Campus, Hubblli.');
-  const [shipPinCode,   setShipPinCode]   = useState('580 031');
-  const [shipMNo,       setShipMNo]       = useState('95455 29950');
-  const [shipGstin,     setShipGstin]     = useState('29AAXFK4926A1Z0');
+  const [shipAddress, setShipAddress] = useState('1st Floor, RHK Building, BVB Campus, Hubblli.');
+  const [shipPinCode, setShipPinCode] = useState('580 031');
+  const [shipMNo, setShipMNo] = useState('95455 29950');
+  const [shipGstin, setShipGstin] = useState('29AAXFK4926A1Z0');
 
   // Shipping
   const [shippingMethod, setShippingMethod] = useState('Door Delivery');
-  const [deliveryDate,   setDeliveryDate]   = useState('');
+  const [deliveryDate, setDeliveryDate] = useState('');
+
+  // Comments
+  const [comments, setComments] = useState('');
 
   // Tax
-  const [gstRate,  setGstRate]  = useState(18);
+  const [gstRate, setGstRate] = useState(18);
   const [roundOff, setRoundOff] = useState('');
 
   // Items
   const [items, setItems] = useState([
-    { itemName: '', hsnCode: '', quantity: '', unitPrice: '' }
+    { purchaseItemId: null, itemName: '', hsnCode: '', quantity: '', unitPrice: '' }
   ]);
 
   const [error, setError] = useState('');
@@ -54,27 +61,28 @@ export default function CreatePurchaseOrder() {
         if (po) {
           setPoNumber(po.poNumber);
           setPoDate(new Date(po.createdAt || po.orderDate).toISOString().split('T')[0]);
-          
+
           let meta = {};
-          try { meta = JSON.parse(po.notes || '{}'); } catch(e){}
-          
+          try { meta = JSON.parse(po.notes || '{}'); } catch (e) { }
+
           setVendorName(meta.vendorName || (po.vendor?.companyName !== '__MANUAL_ENTRY__' ? po.vendor?.companyName : '') || '');
           setVendorGstin(meta.vendorGstin || '');
           setVendorAddress(meta.vendorAddress || '');
           setVendorPinCode(meta.vendorPinCode || '');
           setVendorPhone(meta.vendorPhone || '');
-          
+
           if (meta.shipAddress) setShipAddress(meta.shipAddress);
           if (meta.shipPinCode) setShipPinCode(meta.shipPinCode);
           if (meta.shipMNo) setShipMNo(meta.shipMNo);
           if (meta.shipGstin) setShipGstin(meta.shipGstin);
-          
+
           if (meta.shippingMethod) setShippingMethod(meta.shippingMethod);
           if (po.expectedDate) setDeliveryDate(new Date(po.expectedDate).toISOString().split('T')[0]);
-          
+
           if (meta.gstRate !== undefined) setGstRate(meta.gstRate);
           if (meta.roundOff !== undefined) setRoundOff(meta.roundOff);
-          
+          if (meta.comments !== undefined) setComments(meta.comments);
+
           if (po.items && po.items.length > 0) {
             setItems(po.items.map(it => ({
               itemName: it.itemName || '',
@@ -88,14 +96,14 @@ export default function CreatePurchaseOrder() {
     }
   }, [id, getPurchaseOrder]);
 
-  const addItem    = () => setItems([...items, { itemName: '', hsnCode: '', quantity: '', unitPrice: '' }]);
+  const addItem = () => setItems([...items, { purchaseItemId: null, itemName: '', hsnCode: '', quantity: '', unitPrice: '' }]);
   const removeItem = (i) => items.length > 1 && setItems(items.filter((_, idx) => idx !== i));
   const upd = (i, f, v) => { const n = [...items]; n[i][f] = v; setItems(n); };
 
   const subTotal = items.reduce((s, it) => s + ((+it.quantity || 0) * (+it.unitPrice || 0)), 0);
-  const gstAmt   = parseFloat((subTotal * (+gstRate || 0) / 100).toFixed(2));
-  const rnd      = parseFloat(roundOff) || 0;
-  const grand    = parseFloat((subTotal + gstAmt + rnd).toFixed(2));
+  const gstAmt = parseFloat((subTotal * (+gstRate || 0) / 100).toFixed(2));
+  const rnd = parseFloat(roundOff) || 0;
+  const grand = parseFloat((subTotal + gstAmt + rnd).toFixed(2));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -108,11 +116,12 @@ export default function CreatePurchaseOrder() {
       vendorName, vendorGstin, vendorAddress, vendorPinCode, vendorPhone,
       shipAddress, shipPinCode, shipMNo, shipGstin: '29AAXFK4926A1Z0',
       shippingMethod, gstRate: +gstRate, roundOff: rnd,
-      comments: 'Digitally created, signature not required',
+      comments,
       expectedDate: deliveryDate || null,
       items: items.filter(it => it.itemName.trim()).map(it => ({
+        purchaseItemId: it.purchaseItemId || null,
         itemName: it.itemName,
-        hsnCode:  it.hsnCode || '',
+        hsnCode: it.hsnCode || '',
         quantity: +it.quantity || 0,
         unitPrice: +it.unitPrice || 0,
       }))
@@ -130,7 +139,7 @@ export default function CreatePurchaseOrder() {
   };
 
   const cell = 'border border-gray-400 px-2 py-1';
-  const hdr  = 'bg-blue-700 text-white text-center font-bold text-sm border border-blue-900 px-2 py-1';
+  const hdr = 'bg-blue-700 text-white text-center font-bold text-sm border border-blue-900 px-2 py-1';
 
   return (
     <Layout>
@@ -187,8 +196,8 @@ export default function CreatePurchaseOrder() {
           <table className="w-full border-collapse border border-gray-400">
             <thead>
               <tr>
-                <th className={hdr} style={{width:'50%'}}>VENDOR</th>
-                <th className={hdr} style={{width:'50%'}}>SHIP TO</th>
+                <th className={hdr} style={{ width: '50%' }}>VENDOR</th>
+                <th className={hdr} style={{ width: '50%' }}>SHIP TO</th>
               </tr>
             </thead>
             <tbody>
@@ -272,9 +281,9 @@ export default function CreatePurchaseOrder() {
           <table className="w-full border-collapse border border-gray-400">
             <thead>
               <tr>
-                <th className="bg-blue-100 text-blue-800 font-bold text-sm border border-gray-400 px-2 py-1 text-center" style={{width:'34%'}}>SHIPPING TERMS</th>
-                <th className="bg-blue-100 text-blue-800 font-bold text-sm border border-gray-400 px-2 py-1 text-center" style={{width:'33%'}}>SHIPPING METHOD</th>
-                <th className="bg-blue-100 text-blue-800 font-bold text-sm border border-gray-400 px-2 py-1 text-center" style={{width:'33%'}}>DELIVERY DATE</th>
+                <th className="bg-blue-100 text-blue-800 font-bold text-sm border border-gray-400 px-2 py-1 text-center" style={{ width: '34%' }}>SHIPPING TERMS</th>
+                <th className="bg-blue-100 text-blue-800 font-bold text-sm border border-gray-400 px-2 py-1 text-center" style={{ width: '33%' }}>SHIPPING METHOD</th>
+                <th className="bg-blue-100 text-blue-800 font-bold text-sm border border-gray-400 px-2 py-1 text-center" style={{ width: '33%' }}>DELIVERY DATE</th>
               </tr>
             </thead>
             <tbody>
@@ -315,9 +324,26 @@ export default function CreatePurchaseOrder() {
                 <tr key={i} className="border-b border-gray-300">
                   <td className="border border-gray-400 text-center text-sm py-1 px-1">{i + 1}</td>
                   <td className="border border-gray-400 py-0.5 px-1">
-                    <input value={item.itemName} onChange={e => upd(i, 'itemName', e.target.value)} required
+                    <input list={`catalog-list-${i}`} value={item.itemName} onChange={e => {
+                      const val = e.target.value;
+                      const match = catalogItems.find(ci => ci.name === val);
+                      if (match) {
+                        const n = [...items];
+                        n[i].purchaseItemId = match.id;
+                        n[i].itemName = match.name;
+                        n[i].hsnCode = match.hsnCode || '';
+                        n[i].unitPrice = match.rate || '';
+                        setItems(n);
+                      } else {
+                        upd(i, 'itemName', val);
+                        upd(i, 'purchaseItemId', null);
+                      }
+                    }} required
                       placeholder="Item / description"
                       className="w-full bg-white border-0 outline-none text-sm px-1 py-0 focus:bg-yellow-50" />
+                    <datalist id={`catalog-list-${i}`}>
+                      {catalogItems.map(ci => <option key={ci.id} value={ci.name} />)}
+                    </datalist>
                   </td>
                   <td className="border border-gray-400 py-0.5 px-1">
                     <input value={item.hsnCode} onChange={e => upd(i, 'hsnCode', e.target.value)}
@@ -333,7 +359,7 @@ export default function CreatePurchaseOrder() {
                       className="w-full bg-white border-0 outline-none text-sm text-right px-1 py-0 focus:bg-yellow-50" />
                   </td>
                   <td className="border border-gray-400 py-1 px-2 text-right text-sm font-medium text-gray-800">
-                    {((+item.quantity||0)*(+item.unitPrice||0)).toLocaleString('en-IN', {minimumFractionDigits:2})}
+                    {((+item.quantity || 0) * (+item.unitPrice || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
                   <td className="border border-gray-400 text-center">
                     {items.length > 1 && (
@@ -360,13 +386,18 @@ export default function CreatePurchaseOrder() {
           <table className="w-full border-collapse border border-gray-400">
             <tbody>
               <tr>
-                <td rowSpan={4} className="border border-gray-400 px-3 py-2 align-top text-sm" style={{width:'55%'}}>
+                <td rowSpan={4} className="border border-gray-400 px-3 py-2 align-top text-sm" style={{ width: '55%' }}>
                   <div className="font-bold text-gray-700 mb-1">Comments or Special Instructions</div>
-                  <div className="text-gray-500 text-xs italic">Digitally created, signature not required</div>
+                  <textarea
+                    value={comments}
+                    onChange={e => setComments(e.target.value)}
+                    className="w-full h-24 p-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 outline-none"
+                    placeholder="Enter payment terms, delivery notes, etc..."
+                  />
                 </td>
                 <td className="border border-gray-400 px-2 py-1 text-sm font-semibold text-gray-700 text-right">SUB-TOTAL</td>
                 <td className="border border-gray-400 px-2 py-1 text-sm text-right font-medium text-gray-800">
-                  {subTotal.toLocaleString('en-IN', {minimumFractionDigits:2})}
+                  {subTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </td>
               </tr>
               <tr>
@@ -380,7 +411,7 @@ export default function CreatePurchaseOrder() {
                   </div>
                 </td>
                 <td className="border border-gray-400 px-2 py-1 text-sm text-right font-medium text-gray-800">
-                  {gstAmt.toLocaleString('en-IN', {minimumFractionDigits:2})}
+                  {gstAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </td>
               </tr>
               <tr>
@@ -400,7 +431,7 @@ export default function CreatePurchaseOrder() {
               <tr>
                 <td className="border border-gray-400 bg-blue-700 text-white px-2 py-1 text-sm font-bold text-right">GRAND TOTAL</td>
                 <td className="border border-gray-400 bg-blue-700 text-white px-2 py-1 text-sm font-bold text-right">
-                  ₹{grand.toLocaleString('en-IN', {minimumFractionDigits:2})}
+                  ₹{grand.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                 </td>
               </tr>
             </tbody>
