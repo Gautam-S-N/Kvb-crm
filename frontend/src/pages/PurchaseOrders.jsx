@@ -66,9 +66,6 @@ export default function PurchaseOrders() {
           <Link to="/purchase/items" className="px-4 py-2 bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors">
             Manage Items
           </Link>
-          <Link to="/vendors" className="px-4 py-2 bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors">
-            Manage Vendors
-          </Link>
           <button
             onClick={() => navigate('/purchase/new')}
             className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors shadow"
