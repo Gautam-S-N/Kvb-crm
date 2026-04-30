@@ -58,18 +58,22 @@ exports.getMaterials = async (req, res) => {
 // Aggregates total stock in hand across ALL records sharing the same item code
 exports.getStockSummary = async (req, res) => {
   try {
-    const { itemCode } = req.query;
-    if (!itemCode) {
-      return res.status(400).json({ success: false, message: 'itemCode query param is required' });
+    const { itemCode, itemName } = req.query;
+    if (!itemCode && !itemName) {
+      return res.status(400).json({ success: false, message: 'itemCode or itemName query param is required' });
     }
 
+    const where = {};
+    if (itemCode) where.itemCode = itemCode;
+    else if (itemName) where.itemName = itemName;
+
     const records = await prisma.material.findMany({
-      where: { itemCode },
+      where,
       orderBy: { date: 'desc' }
     });
 
     if (records.length === 0) {
-      return res.json({ success: true, found: false, itemCode });
+      return res.json({ success: true, found: false, itemCode, itemName });
     }
 
     const totalStock  = records.reduce((s, r) => s + Number(r.balance), 0);
@@ -91,8 +95,9 @@ exports.getStockSummary = async (req, res) => {
     return res.json({
       success: true,
       found: true,
-      itemCode,
+      itemCode:    records[0].itemCode,
       itemName:    records[0].itemName,
+      category:    records[0].category,
       unit:        records[0].unit,
       totalInQty,
       totalOutQty,

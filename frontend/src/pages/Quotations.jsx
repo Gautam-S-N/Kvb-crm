@@ -266,24 +266,23 @@ export default function Quotations() {
                             >
                               <FileText size={15} />
                             </button>
-                            {isAdmin && (
-                              <button
-                                id={`convert-sale-${q.id}`}
-                                onClick={() => handleConvert(q)}
-                                disabled={q.status === 'CONVERTED_TO_SALE' || converting === q.id}
-                                className={`p-1.5 rounded-lg transition-colors ${
-                                  q.status === 'CONVERTED_TO_SALE'
-                                    ? 'text-gray-300 cursor-not-allowed'
-                                    : 'text-gray-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/30'
-                                }`}
-                                title={q.status === 'CONVERTED_TO_SALE' ? 'Already converted' : 'Convert to Sale (Admin only)'}
-                              >
-                                {converting === q.id
-                                  ? <RefreshCw size={15} className="animate-spin" />
-                                  : <ArrowRight size={15} />
-                                }
-                              </button>
-                            )}
+                            <button
+                              id={`convert-sale-${q.id}`}
+                              onClick={() => handleConvert(q)}
+                              disabled={q.status === 'CONVERTED_TO_SALE' || converting === q.id}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                q.status === 'CONVERTED_TO_SALE'
+                                  ? 'text-gray-300 cursor-not-allowed'
+                                  : 'text-gray-500 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/30'
+                              }`}
+                              title={q.status === 'CONVERTED_TO_SALE' ? 'Already converted' : 'Convert to Sale'}
+                            >
+                              {converting === q.id
+                                ? <RefreshCw size={15} className="animate-spin" />
+                                : <ArrowRight size={15} />
+                              }
+                            </button>
+
                           </div>
                         </td>
                       </tr>
@@ -314,12 +313,13 @@ export default function Quotations() {
                         className="flex items-center gap-1 text-xs px-3 py-1.5 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300 rounded-lg font-medium">
                         <FileText size={13} /> DOCX
                       </button>
-                      {isAdmin && q.status !== 'CONVERTED_TO_SALE' && (
+                      {q.status !== 'CONVERTED_TO_SALE' && (
                         <button onClick={() => handleConvert(q)}
                           className="flex items-center gap-1 text-xs px-3 py-1.5 bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 rounded-lg font-medium">
                           <ArrowRight size={13} /> Convert to Sale
                         </button>
                       )}
+
                     </div>
                   </div>
                 );

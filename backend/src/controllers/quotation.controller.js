@@ -2,13 +2,43 @@ const prisma = require('../utils/db');
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
 const { numberToWords } = require('../utils/numberToWords');
 
-// Generate quotation number
-const generateQuotationNumber = async () => {
-  const count = await prisma.quotation.count();
-  return `Q-${String(count + 1).padStart(5, '0')}`;
+// Product code map for structured quotation numbers
+const PRODUCT_CODE_MAP = {
+  'SOLAR_TUNNEL_DRYER': 'STD',
+  'SOLAR_PARABOLIC_TROUGH': 'PTC',
+  'SOLAR_PARABOLIC_COOKER': 'SPC',
+  'SCHEFFLER_DISH': 'SSD',
+  'STANDARD': 'STD',
 };
+
+const formatDateDDMMYY = (date = new Date()) => {
+  const d = String(date.getDate()).padStart(2, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const y = String(date.getFullYear()).slice(-2);
+  return `${d}${m}${y}`;
+};
+
+// Generate structured quotation number via counter (raw SQL — no prisma generate needed)
+const generateQuotationNumber = async (templateType = 'STANDARD') => {
+  const productCode = PRODUCT_CODE_MAP[templateType] || 'STD';
+  // Atomically increment
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
+     VALUES (?, ?, 1, NOW())
+     ON DUPLICATE KEY UPDATE counter = counter + 1, updatedAt = NOW()`,
+    uuidv4(), productCode
+  );
+  const [row] = await prisma.$queryRawUnsafe(
+    'SELECT counter FROM quotation_counters WHERE productCode = ?',
+    productCode
+  );
+  const dateStr = formatDateDDMMYY();
+  return `QTN.KVB.${productCode}.${String(Number(row.counter)).padStart(3, '0')}.A.${dateStr}`;
+};
+
 
 // â”€â”€â”€ Load company logo as Base64 (embedded in PDF â€” Puppeteer can't fetch URLs) â”€
 const getLogoBase64 = () => {
@@ -29,7 +59,7 @@ const getLogoBase64 = () => {
 // Get all quotations
 exports.getQuotations = async (req, res) => {
   try {
-    const { leadId, status, page = 1, limit = 20 } = req.query;
+    const { leadId, status, search, page = 1, limit = 20 } = req.query;
     const where = {};
     if (leadId) where.leadId = leadId;
     if (status) where.status = status;
@@ -37,6 +67,16 @@ exports.getQuotations = async (req, res) => {
     if (req.user.role === 'EMPLOYEE') {
       where.createdById = req.user.id;
     }
+
+    // Allow searching by quotation number or customer info
+    if (search) {
+      where.OR = [
+        { quotationNumber: { contains: search } },
+        { customer: { contactName: { contains: search } } },
+        { customer: { companyName: { contains: search } } }
+      ];
+    }
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [quotations, total] = await Promise.all([
       prisma.quotation.findMany({
@@ -106,7 +146,11 @@ exports.createQuotation = async (req, res) => {
       // Template system
       templateType = 'STANDARD',
       customFields = null,
+      // Reservation system
+      reservationId = null,
+      quotationNumber: providedNumber = null,
     } = req.body;
+
 
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
@@ -142,7 +186,7 @@ exports.createQuotation = async (req, res) => {
     // Override the DB totals so quotation.totalAmount is always the real value.
     if (templateType === 'SOLAR_TUNNEL_DRYER' && customFields) {
       // Force mathematical correctness on the backend
-      const cfQty   = parseFloat(customFields.qty) || 1;
+      const cfQty = parseFloat(customFields.qty) || 1;
       const cfPrice = parseFloat(customFields.unitPrice) || parseFloat(customFields.totalAmt) || 0;
       const cfTotal = cfQty * cfPrice;
 
@@ -152,12 +196,33 @@ exports.createQuotation = async (req, res) => {
 
       if (cfTotal > 0) {
         totalAmount = cfTotal;
-        taxAmount   = 0;      // GST shown as "included" in the dryer format
-        subTotal    = cfTotal;
+        taxAmount = 0;      // GST shown as "included" in the dryer format
+        subTotal = cfTotal;
       }
     }
 
-    const quotationNumber = await generateQuotationNumber();
+    // ── Determine quotation number ─────────────────────────────────────────
+    let quotationNumber;
+
+    if (providedNumber) {
+      // Client provided a number (from reservation or manual entry)
+      quotationNumber = providedNumber;
+
+      // If a reservationId was given, consume the reservation
+      if (reservationId) {
+        try {
+          await prisma.$executeRawUnsafe(
+            'DELETE FROM quotation_reservations WHERE id = ?', reservationId
+          );
+        } catch (_) { /* reservation may have already expired — proceed */ }
+      }
+
+    } else {
+      // No reservation — generate one fresh (handles legacy callers)
+      quotationNumber = await generateQuotationNumber(templateType);
+    }
+
+    const now = new Date();
 
     const quotation = await prisma.quotation.create({
       data: {
@@ -170,6 +235,7 @@ exports.createQuotation = async (req, res) => {
         discountPercent: discountPercent || 0,
         taxAmount,
         totalAmount,
+        quotationDate: now,
         validUntil: validUntil ? new Date(validUntil) : null,
         paymentTerms,
         deliveryTerms,
@@ -186,10 +252,17 @@ exports.createQuotation = async (req, res) => {
       }
     });
 
+    // Set versioning columns via raw SQL (not yet in stale Prisma client)
+    await prisma.$executeRawUnsafe(
+      `UPDATE quotations SET versionLabel = 'A', isLatest = 1, originalDate = ? WHERE id = ?`,
+      now, quotation.id
+    );
+
     await prisma.lead.update({
       where: { id: leadId },
       data: { status: 'QUOTATION_SENT' }
     });
+
 
     await prisma.leadTimeline.create({
       data: {
@@ -394,32 +467,32 @@ function buildSolarTunnelDryerHTML(quotation) {
   };
   const img1 = getDryerImg('image1.jpg');   // Moringa leaf drying
   const img2 = getDryerImg('image2.jpeg');  // Coffee beans drying
-  
+
   // Full Page Stationery Watermark (Header + Fade + Footer)
   const letterheadGraphic = getDryerImg('new_img1.png');
 
   // â”€â”€ Editable fields (yellow-highlighted in docx) â”€â”€
-  const toName        = cf.toName        || quotation.customer.contactName;
-  const qtnDate       = cf.qtnDate       || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const subjectLine   = cf.subjectLine   || 'QTN.KVB.STD.005. A.080426 Solar Tunnel Dryer for 20w x 54L = 1080 Sq ft';
-  const productType   = cf.productType   || 'Rectangular type with top parabolic Shape';
-  const dimensions    = cf.dimensions    || '54ft L X 20 ft W X 8.5 ft H';
-  const centerHeight  = cf.centerHeight  || '8.5.5 feet';
+  const toName = cf.toName || quotation.customer.contactName;
+  const qtnDate = cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const subjectLine = cf.subjectLine || 'Solar Tunnel Dryer for 20w x 54L = 1080 Sq ft';
+  const productType = cf.productType || 'Rectangular type with top parabolic Shape';
+  const dimensions = cf.dimensions || '54ft L X 20 ft W X 8.5 ft H';
+  const centerHeight = cf.centerHeight || '8.5.5 feet';
   const structureDoor = cf.structureDoor || 'GP Square Pipe Frame 25x25mm';
-  const purlin        = cf.purlin        || 'GP Square Pipe 40mm x 40mm';
-  const arch          = cf.arch          || 'GP Square pipe 40x40mm';
-  const traySize      = cf.traySize      || 'Tray size 2ftx3ft \u2013 Customer Scope';
-  const itemDesc      = cf.itemDesc      || 'Supply and installation of Polycarbonate sheet covered Solar Tunnel Dryer 1080 Sq ft.';
-  const qty           = cf.qty           || '01';
-  const units         = cf.units         || 'Set';
+  const purlin = cf.purlin || 'GP Square Pipe 40mm x 40mm';
+  const arch = cf.arch || 'GP Square pipe 40x40mm';
+  const traySize = cf.traySize || 'Tray size 2ftx3ft \u2013 Customer Scope';
+  const itemDesc = cf.itemDesc || 'Supply and installation of Polycarbonate sheet covered Solar Tunnel Dryer 1080 Sq ft.';
+  const qty = cf.qty || '01';
+  const units = cf.units || 'Set';
   // totalAmt for the table â€” always use quotation.totalAmount (guaranteed correct by createQuotation)
   const unitPrice = Number(cf.unitPrice) || Number(quotation.totalAmount);
-  const totalAmt  = Number(quotation.totalAmount) || Number(cf.totalAmt) || Number(cf.unitPrice) || 0;
-  const paymentTerms  = cf.paymentTerms  || '70% Advance along with PO 30% against Performa invoice after inspection at factory prior to despatch';
-  const packingTerms  = cf.packingTerms  != null ? cf.packingTerms : '3% extra, (Bubble sheet / corrugated sheet)';
-  const freightTerms  = cf.freightTerms  != null ? cf.freightTerms : 'To your account';
-  const gstRate       = cf.gstRate       != null ? cf.gstRate : 18;
-  const quotRef       = cf.quotRef       || quotation.quotationNumber;
+  const totalAmt = Number(quotation.totalAmount) || Number(cf.totalAmt) || Number(cf.unitPrice) || 0;
+  const paymentTerms = cf.paymentTerms || '70% Advance along with PO 30% against Performa invoice after inspection at factory prior to despatch';
+  const packingTerms = cf.packingTerms != null ? cf.packingTerms : '3% extra, (Bubble sheet / corrugated sheet)';
+  const freightTerms = cf.freightTerms != null ? cf.freightTerms : 'To your account';
+  const gstRate = cf.gstRate != null ? cf.gstRate : 18;
+  const quotRef = cf.quotRef || quotation.quotationNumber;
 
   const fmt = (v) => Number(v).toLocaleString('en-IN', { minimumFractionDigits: 0 });
 
@@ -752,7 +825,7 @@ exports.generatePDF = async (req, res) => {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    const ts      = Date.now();
+    const ts = Date.now();
     const pdfPath = path.join(__dirname, '../../uploads/quotations', `${quotation.quotationNumber}-${ts}.pdf`);
     if (!fs.existsSync(path.dirname(pdfPath))) {
       fs.mkdirSync(path.dirname(pdfPath), { recursive: true });
@@ -769,7 +842,7 @@ exports.generatePDF = async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.download(pdfPath, `Quotation-${quotation.quotationNumber}.pdf`, () => {
-      fs.unlink(pdfPath, () => {}); // clean up after download
+      fs.unlink(pdfPath, () => { }); // clean up after download
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -819,23 +892,23 @@ exports.convertToSale = async (req, res) => {
       const saleItems = quotation.items.map(item => ({
         productId: item.productId,
         description: item.description || null,
-        quantity:   Number(item.quantity),
-        unitPrice:  Number(item.unitPrice),
-        discount:   Number(item.discount)   || 0,
-        taxRate:    Number(item.taxRate)    || 18,
+        quantity: Number(item.quantity),
+        unitPrice: Number(item.unitPrice),
+        discount: Number(item.discount) || 0,
+        taxRate: Number(item.taxRate) || 18,
         totalPrice: Number(item.totalPrice),
       }));
 
       sale = await prisma.sale.create({
         data: {
           saleNumber,
-          customerId:    quotation.customerId,
-          quotationId:   quotation.id,
-          createdById:   req.user.id,
-          subTotal:      Number(quotation.subTotal),
+          customerId: quotation.customerId,
+          quotationId: quotation.id,
+          createdById: req.user.id,
+          subTotal: Number(quotation.subTotal),
           discountAmount: Number(quotation.discountAmount),
-          taxAmount:     Number(quotation.taxAmount),
-          totalAmount:   Number(quotation.totalAmount),
+          taxAmount: Number(quotation.taxAmount),
+          totalAmount: Number(quotation.totalAmount),
           balanceAmount: Number(quotation.totalAmount),
           notes: quotation.notes || null,
           items: { create: saleItems },
@@ -843,8 +916,8 @@ exports.convertToSale = async (req, res) => {
         include: {
           customer: true,
           createdBy: { select: { id: true, firstName: true, lastName: true } },
-          items:     { include: { product: true } },
-          payments:  true,
+          items: { include: { product: true } },
+          payments: true,
         }
       });
     }
@@ -864,8 +937,8 @@ exports.convertToSale = async (req, res) => {
 
     await prisma.leadTimeline.create({
       data: {
-        leadId:      quotation.leadId,
-        action:      'Quotation Converted to Sale',
+        leadId: quotation.leadId,
+        action: 'Quotation Converted to Sale',
         description: `Quotation ${quotation.quotationNumber} converted â†’ Sale ${sale.saleNumber}`,
         performedBy: req.user.id,
       }
@@ -916,27 +989,31 @@ exports.generateDOCX = async (req, res) => {
 
       const rawUnitPrice = Number(cf.unitPrice) || Number(quotation.totalAmount) || 0;
       doc.render({
-        toName:        cf.toName || quotation.customer?.contactName || '',
-        qtnDate:       cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
-        subjectLine:   cf.subjectLine || '',
-        productType:   cf.productType || '',
-        dimensions:    cf.dimensions || '',
-        centerHeight:  cf.centerHeight || '',
+        quotationNumber: quotation.quotationNumber,
+        quotRef: quotation.quotationNumber,
+        refer: quotation.quotationNumber,
+        qutoref: quotation.quotationNumber,
+        toName: cf.toName || quotation.customer?.contactName || '',
+        qtnDate: cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        subjectLine: cf.subjectLine || '',
+        productType: cf.productType || '',
+        dimensions: cf.dimensions || '',
+        centerHeight: cf.centerHeight || '',
         structureDoor: cf.structureDoor || '',
-        purlin:        cf.purlin || '',
-        arch:          cf.arch || '',
-        traySize:      cf.traySize || '',
-        itemDesc:      cf.itemDesc || '',
-        qty:           String(cf.qty || 1),
-        units:         cf.units || 'Set',
-        unitPrice:     rawUnitPrice.toLocaleString('en-IN'),
-        totalAmt:      totalAmt,
-        paymentTerms:  cf.paymentTerms || '',
+        purlin: cf.purlin || '',
+        arch: cf.arch || '',
+        traySize: cf.traySize || '',
+        itemDesc: cf.itemDesc || '',
+        qty: String(cf.qty || 1),
+        units: cf.units || 'Set',
+        unitPrice: rawUnitPrice.toLocaleString('en-IN'),
+        totalAmt: totalAmt,
+        paymentTerms: cf.paymentTerms || '',
         deliveryTerms: cf.deliveryTerms || '',
-        packingTerms:  cf.packingTerms || '',
-        freightTerms:  cf.freightTerms || '',
-        gstRate:       `presently ${cf.gstRate || 18}%`,
-        amountWords:   totalAmtWords,
+        packingTerms: cf.packingTerms || '',
+        freightTerms: cf.freightTerms || '',
+        gstRate: `presently ${cf.gstRate || 18}%`,
+        amountWords: totalAmtWords,
       });
 
       const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
@@ -945,7 +1022,7 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
-    // â”€â”€ Solar Parabolic Cooker: use native Word template â”€â”€
+    // ——— Solar Parabolic Cooker: use native Word template ———
     if (quotation.templateType === 'SOLAR_PARABOLIC_COOKER') {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
@@ -959,21 +1036,21 @@ exports.generateDOCX = async (req, res) => {
 
       const cf = quotation.customFields || {};
 
-      // Build feasibility rows â€” auto-calc kgOfLpg, amount, totalAmount
+      // Build feasibility rows — auto-calc kgOfLpg, amount, totalAmount
       const pricePerCylinder = parseFloat(cf.pricePerCylinder) || 180;
-      const kgPerCylinder    = parseFloat(cf.kgPerCylinder)    || 19.2;
-      const monthsPerYear    = parseInt(cf.monthsPerYear)       || 10;
+      const kgPerCylinder = parseFloat(cf.kgPerCylinder) || 19.2;
+      const monthsPerYear = parseInt(cf.monthsPerYear) || 10;
 
       const feasibilityRows = (cf.feasibilityRows || []).map(row => {
-        const lpg      = parseFloat(row.lpgPerMonth) || 0;
-        const kgOfLpg  = (lpg * kgPerCylinder).toFixed(1);
-        const amount   = Math.round(lpg * pricePerCylinder);
+        const lpg = parseFloat(row.lpgPerMonth) || 0;
+        const kgOfLpg = (lpg * kgPerCylinder).toFixed(1);
+        const amount = Math.round(lpg * pricePerCylinder);
         const totalAmt = Math.round(amount * monthsPerYear);
         return {
-          noOfMonth:   String(row.noOfMonth   || ''),
+          noOfMonth: String(row.noOfMonth || ''),
           lpgPerMonth: String(lpg),
-          kgOfLpg:     String(kgOfLpg),
-          amount:      amount.toLocaleString('en-IN'),
+          kgOfLpg: String(kgOfLpg),
+          amount: amount.toLocaleString('en-IN'),
           totalAmount: totalAmt.toLocaleString('en-IN'),
         };
       });
@@ -982,19 +1059,22 @@ exports.generateDOCX = async (req, res) => {
       const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
       doc.render({
+        quotationNumber: quotation.quotationNumber,
+        quotRef: quotation.quotationNumber,
+        refer: quotation.quotationNumber,
         // Para 9
         paybackPeriod: cf.paybackPeriod || '1 year (10 Months).',
 
         // Table 1 â€” pricing
-        item_desc:     cf.item_desc    || 'Supply of 4 Sq mtr Solar Parabolic cooker',
-        item_qty:      cf.item_qty     || '1',
-        item_price:    cf.item_price   || '1,25,000/-',
-        gstRate:       cf.gstRate      || '18',
-        gstAmount:     cf.gstAmount    || '',
-        packingRate:   cf.packingRate  || '3',
-        packingCharge: cf.packingCharge|| 'Extra',
-        freightTerms:  cf.freightTerms || 'To your account',
-        installCharge: cf.installCharge|| 'Extra',
+        item_desc: cf.item_desc || 'Supply of 4 Sq mtr Solar Parabolic cooker',
+        item_qty: cf.item_qty || '1',
+        item_price: cf.item_price || '1,25,000/-',
+        gstRate: cf.gstRate || '18',
+        gstAmount: cf.gstAmount || '',
+        packingRate: cf.packingRate || '3',
+        packingCharge: cf.packingCharge || 'Extra',
+        freightTerms: cf.freightTerms || 'To your account',
+        installCharge: cf.installCharge || 'Extra',
 
         // Table 2 â€” dynamic feasibility loop
         feasibilityRows,
@@ -1023,29 +1103,33 @@ exports.generateDOCX = async (req, res) => {
       const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
 
       doc.render({
-        qtnDate:                    cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
-        toName:                     cf.toName || quotation.customer?.contactName || '',
-        customerCompanyAndAddress:  cf.customerCompanyAndAddress || quotation.customer?.companyName || '',
-        customerCity:               cf.customerCity || quotation.customer?.city || '',
-        subjectLine:                cf.subjectLine || '700 kg/hr Solar Parabolic Trough Steam Generation System',
-        systemCapacity:             cf.systemCapacity || '700',
+        quotationNumber: quotation.quotationNumber,
+        quotRef: quotation.quotationNumber,
+        refer: quotation.quotationNumber,
+        qtnDate: cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+
+        toName: cf.toName || quotation.customer?.contactName || '',
+        customerCompanyAndAddress: cf.customerCompanyAndAddress || quotation.customer?.companyName || '',
+        customerCity: cf.customerCity || quotation.customer?.city || '',
+        subjectLine: cf.subjectLine || '700 kg/hr Solar Parabolic Trough Steam Generation System',
+        systemCapacity: cf.systemCapacity || '700',
 
         // 5 line items
         item1_desc: cf.item1_desc || '',
-        item1_amt:  cf.item1_amt  || '0.00',
+        item1_amt: cf.item1_amt || '0.00',
         item2_desc: cf.item2_desc || '',
-        item2_amt:  cf.item2_amt  || '0.00',
+        item2_amt: cf.item2_amt || '0.00',
         item3_desc: cf.item3_desc || '',
-        item3_amt:  cf.item3_amt  || '0.00',
+        item3_amt: cf.item3_amt || '0.00',
         item4_desc: cf.item4_desc || '',
-        item4_amt:  cf.item4_amt  || '0.00',
+        item4_amt: cf.item4_amt || '0.00',
         item5_desc: cf.item5_desc || '',
-        item5_amt:  cf.item5_amt  || '0.00',
+        item5_amt: cf.item5_amt || '0.00',
 
-        totalAmt:    cf.totalAmt    || '0.00',
+        totalAmt: cf.totalAmt || '0.00',
         amountWords: cf.amountWords || '',
         deliveryWeeks: cf.deliveryWeeks || '12\u201314',
-        paymentTerms:  cf.paymentTerms  || '',
+        paymentTerms: cf.paymentTerms || '',
       });
 
       const buf = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
@@ -1068,7 +1152,7 @@ exports.generateDOCX = async (req, res) => {
 
       const cf = quotation.customFields || {};
       const fuelType = cf.fuelType || 'Both';
-      const showCylinder    = fuelType === 'Cylinder' || fuelType === 'Both';
+      const showCylinder = fuelType === 'Cylinder' || fuelType === 'Both';
       const showElectricity = fuelType === 'Electricity' || fuelType === 'Both';
 
       // Pre-process: strip unwanted table rows from raw document.xml BEFORE docxtemplater.
@@ -1095,10 +1179,10 @@ exports.generateDOCX = async (req, res) => {
         for (const tag of tags) {
           let safety = 0;
           while (result.includes(tag) && safety++ < 20) {
-            const tagIdx   = result.indexOf(tag);
+            const tagIdx = result.indexOf(tag);
             if (tagIdx < 0) break;
             const rowStart = result.lastIndexOf('<w:tr ', tagIdx);
-            const rowEnd   = result.indexOf('</w:tr>', tagIdx) + '</w:tr>'.length;
+            const rowEnd = result.indexOf('</w:tr>', tagIdx) + '</w:tr>'.length;
             if (rowStart < 0 || rowEnd < '</w:tr>'.length) break;
             result = result.slice(0, rowStart) + result.slice(rowEnd);
           }
@@ -1106,7 +1190,7 @@ exports.generateDOCX = async (req, res) => {
         return result;
       };
 
-      if (!showCylinder)    docXml = removeRowsContaining(docXml, cylinderTags);
+      if (!showCylinder) docXml = removeRowsContaining(docXml, cylinderTags);
       if (!showElectricity) docXml = removeRowsContaining(docXml, electricityTags);
 
       zip.file('word/document.xml', docXml);
@@ -1121,57 +1205,59 @@ exports.generateDOCX = async (req, res) => {
         desc: item.desc || '',
         qty: item.qty || '',
         unit: item.unit || '',
-        rate:   Number(item.rate   || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+        rate: Number(item.rate || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
         amount: Number(item.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 }),
       }));
 
       doc.render({
-        toName:               cf.toName || quotation.customer?.contactName || '',
-        qtnDate:              cf.qtnDate || '',
-        quotRef:              cf.quotRef || '',
+        toName: cf.toName || quotation.customer?.contactName || '',
+        qtnDate: cf.qtnDate || '',
+        quotationNumber: quotation.quotationNumber,
+        quotRef: quotation.quotationNumber,
+        refer: quotation.quotationNumber,
         dishesMealsStatement: cf.dishesMealsStatement || '',
-        subjectLine:          cf.subjectLine || '',
+        subjectLine: cf.subjectLine || '',
         items,
-        totalAmt:    totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
+        totalAmt: totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
         amountWords: cf.amountWords || ('Rupees ' + numberToWords(totalAmt) + ' Only'),
 
         // Economic Viability â€“ Current
-        cylindersPerDay:              fmt(cf.cylindersPerDay),
-        costPerCylinder:              fmt(cf.costPerCylinder),
-        cylinderCostPerDay:           fmt(cf.cylinderCostPerDay),
-        cylinderCostMonthly:          fmt(cf.cylinderCostMonthly),
-        cylinderCostAnnually:         fmt(cf.cylinderCostAnnually),
-        electricityCostMonthly:       fmt(cf.electricityCostMonthly),
-        electricityCostAnnually:      fmt(cf.electricityCostAnnually),
-        nonSunnyDaysExpensesCurrent:  cf.nonSunnyDaysExpensesCurrent || 'Consider in above calculation',
-        setupCostCurrent:             '0',
-        totalCost1YearCurrent:        fmt(cf.totalCost1YearCurrent),
+        cylindersPerDay: fmt(cf.cylindersPerDay),
+        costPerCylinder: fmt(cf.costPerCylinder),
+        cylinderCostPerDay: fmt(cf.cylinderCostPerDay),
+        cylinderCostMonthly: fmt(cf.cylinderCostMonthly),
+        cylinderCostAnnually: fmt(cf.cylinderCostAnnually),
+        electricityCostMonthly: fmt(cf.electricityCostMonthly),
+        electricityCostAnnually: fmt(cf.electricityCostAnnually),
+        nonSunnyDaysExpensesCurrent: cf.nonSunnyDaysExpensesCurrent || 'Consider in above calculation',
+        setupCostCurrent: '0',
+        totalCost1YearCurrent: fmt(cf.totalCost1YearCurrent),
 
         // Economic Viability â€“ Proposed
-        cylindersPerDayProposed:             '0',
-        costPerCylinderProposed:             '0',
-        cylinderCostPerDayProposed:          '0',
-        cylinderCostMonthlyProposed:         '0',
-        cylinderCostAnnuallyProposed:        '0',
-        electricityCostMonthlyProposed:      '0',
-        electricityCostAnnuallyProposed:     '0',
-        nonSunnyDaysExpensesProposed:        fmt(cf.nonSunnyDaysExpensesProposed),
-        setupCost:                           fmt(totalAmt),
-        totalCost1YearProposed:              fmt(cf.totalCost1YearProposed),
-        roi:                                 cf.roi || '0',
+        cylindersPerDayProposed: '0',
+        costPerCylinderProposed: '0',
+        cylinderCostPerDayProposed: '0',
+        cylinderCostMonthlyProposed: '0',
+        cylinderCostAnnuallyProposed: '0',
+        electricityCostMonthlyProposed: '0',
+        electricityCostAnnuallyProposed: '0',
+        nonSunnyDaysExpensesProposed: fmt(cf.nonSunnyDaysExpensesProposed),
+        setupCost: fmt(totalAmt),
+        totalCost1YearProposed: fmt(cf.totalCost1YearProposed),
+        roi: cf.roi || '0',
 
         // Cost Analysis â€“ 10 Years
-        annualMaintenanceCostCurrent:   '0',
-        tenYearMaintenanceCostCurrent:  '0',
-        totalCost10YearsCurrent:        fmt(cf.totalCost10YearsCurrent),
-        annualMaintenanceCost:          fmt(cf.annualMaintenanceCost),
-        tenYearMaintenanceCost:         fmt(cf.tenYearMaintenanceCost),
-        totalCost10YearsProposed:       fmt(cf.totalCost10YearsProposed),
-        savings:                        fmt(cf.savings),
+        annualMaintenanceCostCurrent: '0',
+        tenYearMaintenanceCostCurrent: '0',
+        totalCost10YearsCurrent: fmt(cf.totalCost10YearsCurrent),
+        annualMaintenanceCost: fmt(cf.annualMaintenanceCost),
+        tenYearMaintenanceCost: fmt(cf.tenYearMaintenanceCost),
+        totalCost10YearsProposed: fmt(cf.totalCost10YearsProposed),
+        savings: fmt(cf.savings),
 
         // Terms
-        exWorksTerms:  cf.exWorksTerms  || 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
-        packingTerms:  cf.packingTerms  || 'Packing 3% Extra, Fright and insurance will be in scope.',
+        exWorksTerms: cf.exWorksTerms || 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
+        packingTerms: cf.packingTerms || 'Packing 3% Extra, Fright and insurance will be in scope.',
         paymentTerms1: cf.paymentTerms1 || '70% advance payment upon receipt of the purchase order.',
         paymentTerms2: cf.paymentTerms2 || '20%+100% taxes payment after the installation of the stand and dish',
         paymentTerms3: cf.paymentTerms3 || '10% payment after the completion of installation and commissioning.',
@@ -1215,15 +1301,15 @@ exports.getQuotationsByProduct = async (req, res) => {
       where,
       include: {
         product: { select: { id: true, name: true, hsnCode: true } },
-        quotation: { 
-          select: { 
-            id: true, 
+        quotation: {
+          select: {
+            id: true,
             quotationNumber: true,
             createdAt: true,
-            totalAmount: true, 
+            totalAmount: true,
             status: true,
             customer: { select: { contactName: true } }
-          } 
+          }
         }
       }
     });
@@ -1249,7 +1335,7 @@ exports.getQuotationsByProduct = async (req, res) => {
       entry.totalQuotations += 1;
       entry.totalQty += Number(item.quantity);
       entry.totalValue += Number(item.totalPrice);
-      
+
       if (item.quotation) {
         entry.documents.push({
           id: item.quotation.id,

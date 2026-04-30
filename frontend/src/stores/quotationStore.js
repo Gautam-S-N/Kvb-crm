@@ -5,6 +5,7 @@ export const useQuotationStore = create((set, get) => ({
   quotations: [],
   leadQuotations: [],
   productSummary: [],
+  counters: [],
   isLoading: false,
   error: null,
   pagination: { page: 1, limit: 20, total: 0, pages: 0 },
@@ -50,11 +51,55 @@ export const useQuotationStore = create((set, get) => ({
     }
   },
 
+  // ── Counter management (admin) ──────────────────────────────────────────
+  fetchCounters: async () => {
+    try {
+      const res = await api.get('/quotations/counters');
+      set({ counters: res.data.data });
+      return { success: true, data: res.data.data };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.message };
+    }
+  },
+
+  updateCounter: async (productCode, counter) => {
+    try {
+      const res = await api.put(`/quotations/counters/${productCode}`, { counter });
+      set(state => ({
+        counters: state.counters.map(c =>
+          c.productCode === productCode ? res.data.data : c
+        ),
+      }));
+      return { success: true, data: res.data.data };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.message };
+    }
+  },
+
+  // ── Reservation ─────────────────────────────────────────────────────────
+  reserveNumber: async (templateType) => {
+    try {
+      const res = await api.post('/quotations/reserve', { templateType });
+      return { success: true, data: res.data.data };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.message };
+    }
+  },
+
+  releaseReservation: async (reservationId) => {
+    try {
+      await api.delete(`/quotations/reserve/${reservationId}`);
+      return { success: true };
+    } catch (error) {
+      return { success: false };
+    }
+  },
+
+  // ── Create ───────────────────────────────────────────────────────────────
   createQuotation: async (data) => {
     set({ isLoading: true, error: null });
     try {
       const res = await api.post('/quotations', data);
-      // Refresh lead quotations
       if (data.leadId) {
         const listRes = await api.get(`/quotations?leadId=${data.leadId}&limit=50`);
         set({ leadQuotations: listRes.data.data, isLoading: false });
@@ -68,6 +113,43 @@ export const useQuotationStore = create((set, get) => ({
     }
   },
 
+  // ── Version history ──────────────────────────────────────────────────────
+  fetchVersionHistory: async (quotationId) => {
+    try {
+      const res = await api.get(`/quotations/${quotationId}/versions`);
+      return { success: true, data: res.data.data };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.message };
+    }
+  },
+
+  fetchNextRevisionInfo: async (quotationId) => {
+    try {
+      const res = await api.get(`/quotations/${quotationId}/next-revision`);
+      return { success: true, data: res.data.data };
+    } catch (error) {
+      return { success: false, error: error.response?.data?.message };
+    }
+  },
+
+  reviseQuotation: async (quotationId, data) => {
+    set({ isLoading: true, error: null });
+    try {
+      const res = await api.post(`/quotations/${quotationId}/revise`, data);
+      if (data.leadId) {
+        const listRes = await api.get(`/quotations?leadId=${data.leadId}&limit=50`);
+        set({ leadQuotations: listRes.data.data, isLoading: false });
+      } else {
+        set({ isLoading: false });
+      }
+      return { success: true, data: res.data.data };
+    } catch (error) {
+      set({ error: error.response?.data?.message, isLoading: false });
+      return { success: false, error: error.response?.data?.message };
+    }
+  },
+
+  // ── Downloads ────────────────────────────────────────────────────────────
   downloadPDF: async (id, quotationNumber) => {
     try {
       const token = localStorage.getItem('token');

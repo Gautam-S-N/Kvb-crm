@@ -139,13 +139,12 @@ exports.getLeadById = async (req, res) => {
           orderBy: { createdAt: 'desc' }
         },
         quotations: {
-          select: { 
-            id: true, 
-            quotationNumber: true, 
-            status: true, 
-            totalAmount: true, 
-            createdAt: true 
-          }
+          include: { 
+            items: {
+              include: { product: true }
+            }
+          },
+          orderBy: { createdAt: 'desc' }
         },
         timeline: {
           include: {

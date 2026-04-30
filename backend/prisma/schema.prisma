@@ -425,10 +425,50 @@ model Quotation {
   // One-to-many with Sale — a quotation can produce multiple invoices
   sales           Sale[]
 
+  // Version history — parent of all revisions
+  parentId        String?
+  parent          Quotation?      @relation("QuotationVersions", fields: [parentId], references: [id])
+  versions        Quotation[]     @relation("QuotationVersions")
+
+  // Version tracking
+  versionLabel    String          @default("A")
+  originalDate    DateTime?       // Original creation date — never changes across revisions
+  isLatest        Boolean         @default(true)
+
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
   @@map("quotations")
+}
+
+// ============================================
+// QUOTATION NUMBER COUNTERS (per product type)
+// ============================================
+
+model QuotationCounter {
+  id          String   @id @default(uuid())
+  productCode String   @unique  // STD, PTC, SPC, SSD
+  counter     Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@map("quotation_counters")
+}
+
+// ============================================
+// QUOTATION NUMBER RESERVATIONS
+// Prevents concurrent users from getting same number
+// ============================================
+
+model QuotationReservation {
+  id              String   @id @default(uuid())
+  productCode     String   // STD, PTC, SPC, SSD
+  quotationNumber String   @unique
+  reservedBy      String   // user id
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  @@index([productCode, expiresAt])
+  @@map("quotation_reservations")
 }
 
 model QuotationItem {

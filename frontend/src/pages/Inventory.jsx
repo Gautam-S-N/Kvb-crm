@@ -45,9 +45,9 @@ const Inventory = () => {
     fetchMaterials({ search: searchTerm, status: filter === 'LOW_STOCK' ? 'LOW_STOCK' : undefined });
   }, [searchTerm, filter]);
 
-  // Debounced item code lookup using the aggregation endpoint (only on Add, not Edit)
-  const handleItemCodeChange = (value) => {
-    setFormData(prev => ({ ...prev, itemCode: value }));
+  // Debounced item lookup using the aggregation endpoint (only on Add, not Edit)
+  const handleLookupChange = (field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
     setStockLookup(null);
 
     if (editingMaterial) return;
@@ -57,10 +57,20 @@ const Inventory = () => {
     lookupTimer.current = setTimeout(async () => {
       setLookingUp(true);
       try {
-        const res = await api.get(`/materials/stock-summary?itemCode=${encodeURIComponent(value)}`);
+        const queryParam = field === 'itemCode' ? 'itemCode' : 'itemName';
+        const res = await api.get(`/materials/stock-summary?${queryParam}=${encodeURIComponent(value)}`);
         const d = res.data;
         if (d.found) {
           setStockLookup(d);
+          // Autofill the opposite field
+          setFormData(prev => {
+            const updates = { ...prev };
+            if (field === 'itemCode' && d.itemName) updates.itemName = d.itemName;
+            if (field === 'itemName' && d.itemCode) updates.itemCode = d.itemCode;
+            if (!prev.category && d.category) updates.category = d.category;
+            if (d.unit) updates.unit = d.unit;
+            return updates;
+          });
         } else {
           setStockLookup(null);
         }
@@ -341,7 +351,7 @@ const Inventory = () => {
                       className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none transition-all shadow-sm"
                       placeholder="e.g. Solar Panel 400W"
                       value={formData.itemName}
-                      onChange={(e) => setFormData({...formData, itemName: e.target.value})}
+                      onChange={(e) => handleLookupChange('itemName', e.target.value)}
                     />
                   </div>
                   
@@ -353,7 +363,7 @@ const Inventory = () => {
                         className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-green-500 outline-none transition-all shadow-sm"
                         placeholder="SP-400"
                         value={formData.itemCode}
-                        onChange={(e) => handleItemCodeChange(e.target.value)}
+                        onChange={(e) => handleLookupChange('itemCode', e.target.value)}
                       />
                       {/* Stock lookup result — aggregated across ALL locations */}
                       {lookingUp && (

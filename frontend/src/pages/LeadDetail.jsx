@@ -8,13 +8,16 @@ import { useUserStore } from '../stores/userStore';
 import { useProductStore } from '../stores/productStore';
 import { useAuthStore } from '../stores/authStore';
 import VoiceRecorder from '../components/VoiceRecorder/VoiceRecorder';
+import QuotationNumberBox from '../components/QuotationNumberBox';
+import QuotationVersionHistory from '../components/QuotationVersionHistory';
 import DOMPurify from 'dompurify';
 import { numberToWords } from '../utils/numberToWords';
 import {
   PhoneCall, MessageCircle, Mail, FileText, PackagePlus, Clock,
   Plus, Trash2, Download, ChevronDown, X, Search, CheckCircle2,
-  IndianRupee, Calendar, AlertCircle, Edit3
+  IndianRupee, Calendar, AlertCircle, Edit3, GitBranch
 } from 'lucide-react';
+
 
 const TABS = [
   { id: 'timeline', label: 'Timeline' },
@@ -64,8 +67,10 @@ const LeadDetail = () => {
   const { users, fetchUsers } = useUserStore();
   const { products, fetchProducts } = useProductStore();
   const {
-    leadQuotations, fetchLeadQuotations, createQuotation, downloadPDF, downloadDOCX, isLoading: quotLoading
+    leadQuotations, fetchLeadQuotations, createQuotation, downloadPDF, downloadDOCX,
+    reviseQuotation, fetchNextRevisionInfo, isLoading: quotLoading
   } = useQuotationStore();
+
 
   // Tab state
   const [activeTab, setActiveTab] = useState('timeline');
@@ -98,13 +103,15 @@ const LeadDetail = () => {
   const [quotMeta, setQuotMeta] = useState({ validUntil: '', paymentTerms: '', deliveryTerms: '', notes: '', discountPercent: 0 });
   const [quotSubmitting, setQuotSubmitting] = useState(false);
   const [quotTemplateType, setQuotTemplateType] = useState('SOLAR_PARABOLIC_TROUGH');
-
+  const [reservedNumber, setReservedNumber] = useState('');
+  const [reservationId, setReservationId] = useState(null);
+  const [revisingQuotationId, setRevisingQuotationId] = useState(null);
   // Solar Tunnel Dryer custom fields — pre-filled with docx defaults
   const DRYER_DEFAULTS = {
     toName: '',
     qtnDate: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
     quotRef: '',
-    subjectLine: 'QTN.KVB.STD.005. A.080426 Solar Tunnel Dryer for 20w x 54L = 1080 Sq ft',
+    subjectLine: ' Solar Tunnel Dryer for 20w x 54L = 1080 Sq ft',
     productType: 'Rectangular type with top parabolic Shape',
     dimensions: '54ft L X 20 ft W X 8.5 ft H',
     centerHeight: '8.5 feet',
@@ -165,7 +172,7 @@ const LeadDetail = () => {
     monthsPerYear: '10',
     paybackPeriod: '1 year (10 Months).',
     feasibilityRows: [
-      { noOfMonth: '1',  lpgPerMonth: '10'  },
+      { noOfMonth: '1', lpgPerMonth: '10' },
       { noOfMonth: '10', lpgPerMonth: '100' },
       { noOfMonth: '20', lpgPerMonth: '200' },
       { noOfMonth: '28', lpgPerMonth: '280' },
@@ -174,7 +181,7 @@ const LeadDetail = () => {
   const [cookerFields, setCookerFields] = useState({ ...COOKER_DEFAULTS });
 
   // Helpers for cooker feasibility rows
-  const addCookerRow    = () => setCookerFields(f => ({ ...f, feasibilityRows: [...f.feasibilityRows, EMPTY_COOKER_ROW()] }));
+  const addCookerRow = () => setCookerFields(f => ({ ...f, feasibilityRows: [...f.feasibilityRows, EMPTY_COOKER_ROW()] }));
   const removeCookerRow = (i) => setCookerFields(f => ({ ...f, feasibilityRows: f.feasibilityRows.filter((_, idx) => idx !== i) }));
   const updateCookerRow = (i, field, val) => setCookerFields(f => ({
     ...f,
@@ -204,7 +211,7 @@ const LeadDetail = () => {
     electricityCostMonthly: 53400,
     nonSunnyDaysExpensesProposed: 1188000,
     annualMaintenanceCost: 200000,
-    
+
     exWorksTerms: 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
     packingTerms: 'Packing 3% Extra, Fright and insurance will be in scope.',
     paymentTerms1: '70% advance payment upon receipt of the purchase order.',
@@ -214,32 +221,32 @@ const LeadDetail = () => {
   };
   const [schefflerFields, setSchefflerFields] = useState({ ...SCHEFFLER_DEFAULTS });
 
-  const addSchefflerItem = () => setSchefflerFields(prev => ({...prev, items: [...prev.items, {desc:'', qty:1, unit:'Nos', rate:0, amount:0}]}));
+  const addSchefflerItem = () => setSchefflerFields(prev => ({ ...prev, items: [...prev.items, { desc: '', qty: 1, unit: 'Nos', rate: 0, amount: 0 }] }));
   const removeSchefflerItem = (idx) => {
     setSchefflerFields(prev => {
       const newItems = prev.items.filter((_, i) => i !== idx);
-      const totalAmt = newItems.reduce((acc, it) => acc + (parseFloat(it.amount)||0), 0);
-      return {...prev, items: newItems, totalAmt};
+      const totalAmt = newItems.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
+      return { ...prev, items: newItems, totalAmt };
     });
   };
   const updateSchefflerItem = (idx, field, val) => {
     setSchefflerFields(prev => {
-       const newItems = [...prev.items];
-       newItems[idx][field] = val;
-       if (field === 'qty' || field === 'rate') {
-          newItems[idx].amount = (parseFloat(newItems[idx].qty)||0) * (parseFloat(newItems[idx].rate)||0);
-       }
-       const totalAmt = newItems.reduce((acc, it) => acc + (parseFloat(it.amount)||0), 0);
-       return {...prev, items: newItems, totalAmt};
+      const newItems = [...prev.items];
+      newItems[idx][field] = val;
+      if (field === 'qty' || field === 'rate') {
+        newItems[idx].amount = (parseFloat(newItems[idx].qty) || 0) * (parseFloat(newItems[idx].rate) || 0);
+      }
+      const totalAmt = newItems.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
+      return { ...prev, items: newItems, totalAmt };
     });
   };
 
   const calcSchefflerROI = () => {
-    let { 
-      fuelType, cylindersPerDay, costPerCylinder, electricityCostMonthly, totalAmt, 
-      nonSunnyDaysExpensesProposed, annualMaintenanceCost 
+    let {
+      fuelType, cylindersPerDay, costPerCylinder, electricityCostMonthly, totalAmt,
+      nonSunnyDaysExpensesProposed, annualMaintenanceCost
     } = schefflerFields;
-    
+
     totalAmt = parseFloat(totalAmt) || 0;
     cylindersPerDay = parseFloat(cylindersPerDay) || 0;
     costPerCylinder = parseFloat(costPerCylinder) || 0;
@@ -275,7 +282,7 @@ const LeadDetail = () => {
       let annualRealSavings = savings / 10;
       roiYears = (totalCost1YearProposed / annualRealSavings).toFixed(2);
     }
-    
+
     return {
       cylinderCostPerDay, cylinderCostMonthly, cylinderCostAnnually,
       electricityCostAnnually, totalCost1YearCurrent, totalCost10YearsCurrent,
@@ -376,7 +383,7 @@ const LeadDetail = () => {
     if (quotTemplateType === 'SOLAR_PARABOLIC_COOKER') {
       const placeholderProduct = products.find(p => p.isActive);
       const priceNum = parseFloat(cookerFields.item_price) || 0;
-      const gstNum   = Math.round(priceNum * (parseFloat(cookerFields.gstRate) || 18) / 100);
+      const gstNum = Math.round(priceNum * (parseFloat(cookerFields.gstRate) || 18) / 100);
       const syntheticItems = placeholderProduct ? [{
         productId: placeholderProduct.id,
         description: cookerFields.item_desc,
@@ -392,7 +399,7 @@ const LeadDetail = () => {
         customFields: {
           ...cookerFields,
           item_price: priceNum.toLocaleString('en-IN') + '/-',
-          gstAmount:  gstNum.toLocaleString('en-IN'),
+          gstAmount: gstNum.toLocaleString('en-IN'),
         },
         items: syntheticItems,
         paymentTerms: '',
@@ -435,7 +442,7 @@ const LeadDetail = () => {
       // For dryer template we create a synthetic single-item quotation
       // so that convertToSale always has proper numeric data.
       const unitP = parseFloat(dryerFields.unitPrice) || 0;
-      const totalA = parseFloat(dryerFields.totalAmt)  || unitP;
+      const totalA = parseFloat(dryerFields.totalAmt) || unitP;
       // We use the first active product as a placeholder item.
       // If no products exist, we skip items (backend handles empty array).
       const placeholderProduct = products.find(p => p.isActive);
@@ -495,10 +502,24 @@ const LeadDetail = () => {
       };
     }
 
-    const res = await createQuotation(payload);
+    // Inject the reserved quotation number into every payload
+    if (reservedNumber) {
+      payload.quotationNumber = reservedNumber;
+      payload.reservationId = reservationId;
+    }
+
+    let res;
+    if (revisingQuotationId) {
+      res = await reviseQuotation(revisingQuotationId, payload);
+    } else {
+      res = await createQuotation(payload);
+    }
+
     setQuotSubmitting(false);
     if (res.success) {
       setShowQuotationForm(false);
+      setReservedNumber('');
+      setReservationId(null);
       setQuotItems([EMPTY_QUOTATION_ITEM()]);
       setQuotMeta({ validUntil: '', paymentTerms: '', deliveryTerms: '', notes: '', discountPercent: 0 });
       setQuotTemplateType('SOLAR_PARABOLIC_TROUGH');
@@ -506,8 +527,10 @@ const LeadDetail = () => {
       setSchefflerFields({ ...SCHEFFLER_DEFAULTS });
       setParabolicFields({ ...PARABOLIC_DEFAULTS });
       setCookerFields({ ...COOKER_DEFAULTS });
+      setRevisingQuotationId(null);
+      alert(revisingQuotationId ? 'Revision created successfully!' : 'Quotation created successfully!');
     } else {
-      alert(res.error || 'Failed to create quotation');
+      alert(res.error || (revisingQuotationId ? 'Failed to create revision' : 'Failed to create quotation'));
     }
   };
 
@@ -660,11 +683,10 @@ const LeadDetail = () => {
                 <nav className="flex overflow-x-auto px-4 scrollbar-none">
                   {TABS.map(tab => (
                     <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                      className={`py-3.5 px-3 border-b-2 font-semibold text-xs whitespace-nowrap transition-colors ${
-                        activeTab === tab.id
+                      className={`py-3.5 px-3 border-b-2 font-semibold text-xs whitespace-nowrap transition-colors ${activeTab === tab.id
                           ? 'border-green-500 text-green-600'
                           : 'border-transparent text-gray-500 hover:text-gray-700'
-                      }`}>
+                        }`}>
                       {tab.label}
                       {tab.id === 'quotations' && leadQuotations.length > 0 && (
                         <span className="ml-1.5 bg-violet-100 text-violet-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
@@ -884,12 +906,11 @@ const LeadDetail = () => {
                       ) : followUps.map(f => (
                         <div key={f.id} className="border border-gray-200 rounded-xl p-4 flex justify-between items-center hover:border-blue-200 hover:bg-blue-50/30 transition-colors">
                           <div className="flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold ${
-                              f.type === 'CALL' ? 'bg-blue-100 text-blue-600' :
-                              f.type === 'WHATSAPP' ? 'bg-green-100 text-green-600' :
-                              f.type === 'MEETING' ? 'bg-purple-100 text-purple-600' :
-                              'bg-amber-100 text-amber-600'
-                            }`}>
+                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold ${f.type === 'CALL' ? 'bg-blue-100 text-blue-600' :
+                                f.type === 'WHATSAPP' ? 'bg-green-100 text-green-600' :
+                                  f.type === 'MEETING' ? 'bg-purple-100 text-purple-600' :
+                                    'bg-amber-100 text-amber-600'
+                              }`}>
                               {f.type === 'CALL' ? '📞' : f.type === 'WHATSAPP' ? '💬' : f.type === 'MEETING' ? '🤝' : '📧'}
                             </div>
                             <div>
@@ -912,9 +933,8 @@ const LeadDetail = () => {
                 {/* ════ WHATSAPP / EMAIL SIMULATOR ════ */}
                 {(activeTab === 'whatsapp' || activeTab === 'emails') && (
                   <div className="text-center py-6">
-                    <div className={`mx-auto w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${
-                      activeTab === 'whatsapp' ? 'bg-green-100 text-green-600' : 'bg-purple-100 text-purple-600'
-                    }`}>
+                    <div className={`mx-auto w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${activeTab === 'whatsapp' ? 'bg-green-100 text-green-600' : 'bg-purple-100 text-purple-600'
+                      }`}>
                       {activeTab === 'whatsapp' ? <MessageCircle size={32} /> : <Mail size={32} />}
                     </div>
                     <h3 className="font-bold text-gray-900 text-lg mb-2">
@@ -929,9 +949,8 @@ const LeadDetail = () => {
                         rows={4} className="w-full p-3 border rounded-lg text-sm mb-3 outline-none focus:ring-2 focus:ring-green-400 bg-white resize-none"
                         placeholder={`Hi ${customer?.contactName}, ...`} />
                       <button onClick={() => handleSimulateMessage(activeTab === 'whatsapp' ? 'WhatsApp' : 'Email')}
-                        className={`w-full py-2.5 text-white font-bold rounded-lg shadow text-sm transition-colors ${
-                          activeTab === 'whatsapp' ? 'bg-green-600 hover:bg-green-700' : 'bg-purple-600 hover:bg-purple-700'
-                        }`}>
+                        className={`w-full py-2.5 text-white font-bold rounded-lg shadow text-sm transition-colors ${activeTab === 'whatsapp' ? 'bg-green-600 hover:bg-green-700' : 'bg-purple-600 hover:bg-purple-700'
+                          }`}>
                         Log to Timeline
                       </button>
                     </div>
@@ -966,9 +985,8 @@ const LeadDetail = () => {
                             ) : filteredProductOptions.map(p => (
                               <button key={p.id} type="button"
                                 onClick={() => { setProductForm({ ...productForm, productId: p.id }); setProductSearch(p.name); }}
-                                className={`w-full text-left px-3 py-2 text-sm flex justify-between hover:bg-orange-50 transition-colors border-b last:border-0 border-gray-50 ${
-                                  productForm.productId === p.id ? 'bg-orange-100 font-semibold' : ''
-                                }`}>
+                                className={`w-full text-left px-3 py-2 text-sm flex justify-between hover:bg-orange-50 transition-colors border-b last:border-0 border-gray-50 ${productForm.productId === p.id ? 'bg-orange-100 font-semibold' : ''
+                                  }`}>
                                 <span>{p.name}</span>
                                 <span className="text-gray-400 text-xs">₹{Number(p.basePrice).toLocaleString()}</span>
                               </button>
@@ -1041,17 +1059,25 @@ const LeadDetail = () => {
                     {/* Existing Quotations */}
                     {leadQuotations.length > 0 && (
                       <div className="space-y-3 mb-6">
-                        {leadQuotations.map(q => (
-                          <div key={q.id} className="border border-gray-100 rounded-xl p-4 bg-white shadow-sm">
-                            <div className="flex justify-between items-start">
+                        {leadQuotations.filter(q => q.isLatest !== false).map(q => (
+                          <div key={q.id} className="border-2 border-violet-100 rounded-xl p-4 bg-white shadow-sm relative overflow-hidden">
+                            {/* Active Badge */}
+                            <div className="absolute -right-6 top-3 bg-violet-600 text-white text-[10px] font-bold py-0.5 px-6 rotate-45 shadow-sm">
+                              ACTIVE
+                            </div>
+                            <div className="flex justify-between items-start pr-8">
                               <div>
                                 <span className="font-mono font-bold text-gray-900 text-sm">{q.quotationNumber}</span>
-                                <span className={`ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                                  q.status === 'DRAFT' ? 'bg-gray-100 text-gray-600' :
-                                  q.status === 'SENT' ? 'bg-blue-100 text-blue-700' :
-                                  q.status === 'CONVERTED_TO_SALE' ? 'bg-purple-100 text-purple-700' :
-                                  'bg-green-100 text-green-700'
-                                }`}>{q.status?.replace(/_/g,' ')}</span>
+                                {q.versionLabel && (
+                                  <span className="ml-1.5 bg-violet-100 text-violet-700 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase">
+                                    v{q.versionLabel}
+                                  </span>
+                                )}
+                                <span className={`ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full ${q.status === 'DRAFT' ? 'bg-gray-100 text-gray-600' :
+                                    q.status === 'SENT' ? 'bg-blue-100 text-blue-700' :
+                                      q.status === 'CONVERTED_TO_SALE' ? 'bg-purple-100 text-purple-700' :
+                                        'bg-green-100 text-green-700'
+                                  }`}>{q.status?.replace(/_/g, ' ')}</span>
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className="font-bold text-green-600 text-sm">₹{Number(q.totalAmount || 0).toLocaleString()}</span>
@@ -1065,12 +1091,55 @@ const LeadDetail = () => {
                                   title="Download DOCX">
                                   <FileText size={14} />
                                 </button>
+                                <button
+                                  type="button"
+                                  title="Create new revision of this quotation"
+                                  onClick={async () => {
+                                    const nextRev = await fetchNextRevisionInfo(q.id);
+                                    if (!nextRev.success) return alert(nextRev.error || 'Failed to fetch revision info');
+
+                                    setRevisingQuotationId(q.id);
+                                    setQuotTemplateType(q.templateType);
+                                    setReservedNumber(nextRev.data.quotationNumber);
+
+                                    // Pre-fill the correct template state
+                                    if (q.templateType === 'SOLAR_TUNNEL_DRYER') {
+                                      setDryerFields({ ...DRYER_DEFAULTS, ...(q.customFields || {}) });
+                                    } else if (q.templateType === 'SOLAR_PARABOLIC_TROUGH') {
+                                      setParabolicFields({ ...PARABOLIC_DEFAULTS, ...(q.customFields || {}) });
+                                    } else if (q.templateType === 'SOLAR_PARABOLIC_COOKER') {
+                                      setCookerFields({ ...COOKER_DEFAULTS, ...(q.customFields || {}) });
+                                    } else if (q.templateType === 'SCHEFFLER_DISH') {
+                                      setSchefflerFields({ ...SCHEFFLER_DEFAULTS, ...(q.customFields || {}) });
+                                    } else {
+                                      setQuotItems(q.items.length ? q.items : [EMPTY_QUOTATION_ITEM()]);
+                                      setQuotMeta({
+                                        validUntil: q.validUntil ? new Date(q.validUntil).toISOString().split('T')[0] : '',
+                                        paymentTerms: q.paymentTerms || '',
+                                        deliveryTerms: q.deliveryTerms || '',
+                                        notes: q.notes || '',
+                                        discountPercent: q.discountPercent || 0,
+                                      });
+                                    }
+
+                                    setShowQuotationForm(true);
+                                    setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 100);
+                                  }}
+                                  className="p-1.5 text-gray-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors"
+                                >
+                                  <GitBranch size={14} />
+                                </button>
                               </div>
                             </div>
                             <div className="flex gap-4 mt-2 text-xs text-gray-500">
                               <span>Created: {format(new Date(q.createdAt), 'MMM d, yyyy')}</span>
                               {q.validUntil && <span>Valid till: {format(new Date(q.validUntil), 'MMM d, yyyy')}</span>}
                             </div>
+                            {/* Version History */}
+                            <QuotationVersionHistory
+                              quotationId={q.id}
+                              currentNumber={q.quotationNumber}
+                            />
                           </div>
                         ))}
                       </div>
@@ -1079,14 +1148,29 @@ const LeadDetail = () => {
                     {/* Create Quotation Form */}
                     {showQuotationForm && (
                       <form onSubmit={handleCreateQuotation} className="bg-violet-50 border border-violet-200 rounded-xl p-5 space-y-4">
-                        <h4 className="font-bold text-violet-900 text-sm">New Quotation</h4>
+                        <div className="flex justify-between items-center">
+                          <h4 className="font-bold text-violet-900 text-sm">
+                            {revisingQuotationId ? 'Edit New Revision' : 'New Quotation'}
+                          </h4>
+                          {revisingQuotationId && (
+                            <button type="button" onClick={() => {
+                              setRevisingQuotationId(null);
+                              setShowQuotationForm(false);
+                            }} className="text-xs text-red-600 hover:underline">Cancel Revision</button>
+                          )}
+                        </div>
 
                         {/* ── Template Selector ── */}
                         <div>
                           <label className="text-xs font-bold text-violet-900 block mb-1">Quotation Template</label>
                           <select
                             value={quotTemplateType}
-                            onChange={e => setQuotTemplateType(e.target.value)}
+                            onChange={e => {
+                              setQuotTemplateType(e.target.value);
+                              // Reset reservation when product changes — QuotationNumberBox will re-reserve
+                              setReservedNumber('');
+                              setReservationId(null);
+                            }}
                             className="w-full p-2 border border-violet-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-violet-500 bg-white font-semibold text-violet-800"
                           >
                             <option value="SOLAR_PARABOLIC_TROUGH">Solar Parabolic Trough</option>
@@ -1095,6 +1179,16 @@ const LeadDetail = () => {
                             <option value="SCHEFFLER_DISH">Scheffler Dish</option>
                           </select>
                         </div>
+
+                        {/* ── Quotation Number Display Box ── */}
+                        <QuotationNumberBox
+                          templateType={quotTemplateType}
+                          value={reservedNumber}
+                          onChange={setReservedNumber}
+                          onReservation={({ reservationId: rid }) => setReservationId(rid)}
+                          reservationId={reservationId}
+                          autoReserve={!revisingQuotationId}
+                        />
 
                         {/* ═══════════════════════════════════════════════════ */}
                         {/* SOLAR PARABOLIC TROUGH template — custom fields */}
@@ -1167,7 +1261,7 @@ const LeadDetail = () => {
                                   <div className="flex-1">Description</div>
                                   <div className="w-24 text-right">Amount (₹ Lakhs)</div>
                                 </div>
-                                {[1,2,3,4,5].map(n => (
+                                {[1, 2, 3, 4, 5].map(n => (
                                   <div key={n} className="flex gap-2 items-start bg-gray-50 p-2 rounded-lg border border-gray-100">
                                     <div className="w-5 h-5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-1">{n}</div>
                                     <div className="flex-1">
@@ -1279,7 +1373,7 @@ const LeadDetail = () => {
                                     <input type="number" value={cookerFields.gstRate}
                                       onChange={e => setCookerFields({ ...cookerFields, gstRate: e.target.value })}
                                       className="w-full p-1.5 border border-gray-200 rounded text-sm text-right focus:ring-1 focus:ring-green-400 outline-none bg-white" />
-                                    <div className="text-[10px] text-gray-400 mt-0.5 text-right">GST = ₹{Math.round((parseFloat(cookerFields.item_price)||0) * (parseFloat(cookerFields.gstRate)||18) / 100).toLocaleString('en-IN')}</div>
+                                    <div className="text-[10px] text-gray-400 mt-0.5 text-right">GST = ₹{Math.round((parseFloat(cookerFields.item_price) || 0) * (parseFloat(cookerFields.gstRate) || 18) / 100).toLocaleString('en-IN')}</div>
                                   </div>
                                   <div>
                                     <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Packing Rate (%)</label>
@@ -1356,9 +1450,9 @@ const LeadDetail = () => {
                               </div>
                               <div className="space-y-1">
                                 {cookerFields.feasibilityRows.map((row, idx) => {
-                                  const lpg    = parseFloat(row.lpgPerMonth) || 0;
-                                  const kgLpg  = (lpg * (parseFloat(cookerFields.kgPerCylinder) || 19.2)).toFixed(1);
-                                  const amt    = Math.round(lpg * (parseFloat(cookerFields.pricePerCylinder) || 180));
+                                  const lpg = parseFloat(row.lpgPerMonth) || 0;
+                                  const kgLpg = (lpg * (parseFloat(cookerFields.kgPerCylinder) || 19.2)).toFixed(1);
+                                  const amt = Math.round(lpg * (parseFloat(cookerFields.pricePerCylinder) || 180));
                                   const totAmt = Math.round(amt * (parseFloat(cookerFields.monthsPerYear) || 10));
                                   return (
                                     <div key={idx} className="flex gap-1 items-center bg-gray-50 p-1.5 rounded border border-gray-100 group hover:border-green-300 transition-colors">
@@ -1375,7 +1469,7 @@ const LeadDetail = () => {
                                       <div className="flex-1 p-1 text-sm text-right font-bold text-green-700">{totAmt.toLocaleString('en-IN')}</div>
                                       <button type="button" onClick={() => removeCookerRow(idx)}
                                         className="w-6 p-1 text-gray-300 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-all">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="w-4 h-4"><path d="M18 6L6 18M6 6l12 12" /></svg>
                                       </button>
                                     </div>
                                   );
@@ -1618,13 +1712,13 @@ const LeadDetail = () => {
 
                             {/* Dishes/Meals Statement */}
                             <div>
-                               <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Productivity Statement (Editable)</label>
-                               <textarea
-                                 value={schefflerFields.dishesMealsStatement}
-                                 onChange={e => setSchefflerFields({ ...schefflerFields, dishesMealsStatement: e.target.value })}
-                                 rows={2}
-                                 className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-sky-400 bg-white resize-none"
-                               />
+                              <label className="text-[10px] font-bold text-violet-900 block mb-0.5">Productivity Statement (Editable)</label>
+                              <textarea
+                                value={schefflerFields.dishesMealsStatement}
+                                onChange={e => setSchefflerFields({ ...schefflerFields, dishesMealsStatement: e.target.value })}
+                                rows={2}
+                                className="w-full p-1.5 border border-gray-200 rounded text-sm outline-none focus:ring-1 focus:ring-sky-400 bg-white resize-none"
+                              />
                             </div>
 
                             {/* Cost Breakdown Section */}
@@ -1639,12 +1733,12 @@ const LeadDetail = () => {
                               <div className="space-y-2">
                                 {/* Header Labels */}
                                 <div className="flex gap-2 text-[10px] font-bold text-gray-500 px-2 uppercase tracking-wider">
-                                   <div className="flex-1">Description</div>
-                                   <div className="w-16">Qty</div>
-                                   <div className="w-20">UOM</div>
-                                   <div className="w-24">Unit Rate</div>
-                                   <div className="w-28 text-right">Total</div>
-                                   <div className="w-8"></div>
+                                  <div className="flex-1">Description</div>
+                                  <div className="w-16">Qty</div>
+                                  <div className="w-20">UOM</div>
+                                  <div className="w-24">Unit Rate</div>
+                                  <div className="w-28 text-right">Total</div>
+                                  <div className="w-8"></div>
                                 </div>
                                 {schefflerFields.items.map((item, idx) => (
                                   <div key={idx} className="flex gap-2 items-start bg-gray-50 p-2 rounded-lg border border-gray-100 group hover:border-sky-300 transition-colors">
@@ -1688,7 +1782,7 @@ const LeadDetail = () => {
                             {/* ROI Section */}
                             <div className="border border-sky-200 rounded-xl p-3 bg-white">
                               <label className="text-xs font-bold text-violet-900 block mb-2">Economic Viability &amp; ROI Calc</label>
-                              
+
                               <div className="mb-3 flex gap-2">
                                 {['Cylinder', 'Electricity', 'Both'].map(t => (
                                   <label key={t} className={`flex-1 text-center py-1.5 border rounded cursor-pointer text-xs font-bold transition-colors ${schefflerFields.fuelType === t ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}>
@@ -1738,11 +1832,11 @@ const LeadDetail = () => {
                                     className="w-full p-1.5 border border-red-200 rounded text-sm bg-red-50" />
                                 </div>
                               </div>
-                              
+
                               <div className="bg-sky-50 p-2 rounded border border-sky-100 flex justify-between items-center transition-all">
                                 <div className="text-[10px] text-sky-800 font-medium">
-                                  <strong>10-Year Totals Preview:</strong><br/>
-                                  Current: ₹{(calcSchefflerROI().totalCost10YearsCurrent).toLocaleString('en-IN')}<br/>
+                                  <strong>10-Year Totals Preview:</strong><br />
+                                  Current: ₹{(calcSchefflerROI().totalCost10YearsCurrent).toLocaleString('en-IN')}<br />
                                   Proposed: ₹{(calcSchefflerROI().totalCost10YearsProposed).toLocaleString('en-IN')}
                                 </div>
                                 <div className="text-right">
@@ -1754,7 +1848,7 @@ const LeadDetail = () => {
 
                             <div className="border border-indigo-200 rounded-xl p-3 bg-white mt-4">
                               <label className="text-xs font-bold text-violet-900 block mb-2">Terms & Condition (Editable)</label>
-                              
+
                               <div className="space-y-2">
                                 <div>
                                   <label className="text-[10px] font-bold text-gray-600 block mb-0.5">Ex Works Terms</label>
@@ -1778,13 +1872,13 @@ const LeadDetail = () => {
                                 </div>
                               </div>
                             </div>
-                            
+
                             <hr className="border-gray-100 my-4" />
                             <div className="mb-4">
-                                <label className="text-[10px] font-bold text-violet-900 block mb-0.5">GST Rate (%)</label>
-                                <input type="number" value={schefflerFields.gstRate}
-                                  onChange={e => setSchefflerFields({ ...schefflerFields, gstRate: e.target.value })}
-                                  className="w-full p-1.5 border border-gray-200 rounded text-sm w-32" />
+                              <label className="text-[10px] font-bold text-violet-900 block mb-0.5">GST Rate (%)</label>
+                              <input type="number" value={schefflerFields.gstRate}
+                                onChange={e => setSchefflerFields({ ...schefflerFields, gstRate: e.target.value })}
+                                className="w-full p-1.5 border border-gray-200 rounded text-sm w-32" />
                             </div>
 
                           </div>

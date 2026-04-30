@@ -21,6 +21,15 @@ const getLogoBase64 = () => {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const generateSaleNumber = async () => {
+  const settings = await prisma.setting.findMany({
+    where: { key: { in: ['INV_PREFIX', 'INV_DATE_FORMAT'] } }
+  });
+  const getSetting = (k, def) => settings.find(s => s.key === k)?.value || def;
+
+  const prefix = getSetting('INV_PREFIX', 'INV');
+  const format = getSetting('INV_DATE_FORMAT', 'FY_YY_YY');
+  const customYearStr = getSetting('INV_CUSTOM_YEAR', '25-26');
+
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
@@ -31,16 +40,26 @@ const generateSaleNumber = async () => {
   const fyStartDate = new Date(fyStartYear, 3, 1);
   const fyEndDate = new Date(fyEndYear, 3, 1);
 
-  const count = await prisma.sale.count({
-    where: {
-      createdAt: {
-        gte: fyStartDate,
-        lt: fyEndDate
-      }
-    }
-  });
+  let dateStr = '';
+  if (format === 'FY_YY_YY') dateStr = fyString;
+  else if (format === 'YYYY') dateStr = String(year);
+  else if (format === 'YYYYMM') dateStr = `${year}${String(month).padStart(2, '0')}`;
+  else if (format === 'CUSTOM') dateStr = customYearStr;
+
+  const where = format === 'FY_YY_YY' ? {
+    createdAt: { gte: fyStartDate, lt: fyEndDate }
+  } : format === 'YYYY' ? {
+    createdAt: { gte: new Date(year, 0, 1), lt: new Date(year + 1, 0, 1) }
+  } : format === 'YYYYMM' ? {
+    createdAt: { gte: new Date(year, month - 1, 1), lt: new Date(year, month, 1) }
+  } : format === 'CUSTOM' ? {
+    saleNumber: { contains: `/${customYearStr}/` }
+  } : {};
+
+  const count = await prisma.sale.count({ where });
   
-  return `INV/${fyString}/${String(count + 1).padStart(3, '0')}`;
+  const middlePart = dateStr ? `/${dateStr}` : '';
+  return `${prefix}${middlePart}/${String(count + 1).padStart(3, '0')}`;
 };
 
 const generateReceiptNumber = async () => {
