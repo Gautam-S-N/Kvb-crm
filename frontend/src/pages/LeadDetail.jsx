@@ -64,7 +64,7 @@ const LeadDetail = () => {
     currentLead, isLoading, getLead, updateLead, assignLead,
     addNote, addFollowUp, logInteraction, addLeadProduct, removeLeadProduct, addTimelineEvent
   } = useLeadStore();
-  const { users, fetchUsers } = useUserStore();
+  const { users, fetchUsers, fetchSubordinates } = useUserStore();
   const { products, fetchProducts } = useProductStore();
   const {
     leadQuotations, fetchLeadQuotations, createQuotation, downloadPDF, downloadDOCX,
@@ -96,6 +96,9 @@ const LeadDetail = () => {
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [productForm, setProductForm] = useState({ productId: '', quantity: 1, notes: '' });
+
+  // Subordinates state for Assignment Dropdown
+  const [subordinates, setSubordinates] = useState([]);
 
   // Quotation State
   const [showQuotationForm, setShowQuotationForm] = useState(false);
@@ -296,6 +299,11 @@ const LeadDetail = () => {
     fetchUsers();
     fetchProducts();
     fetchLeadQuotations(id);
+    
+    // Fetch subordinates if the user might be a manager
+    if (user?.role !== 'ADMIN') {
+      fetchSubordinates().then(setSubordinates);
+    }
   }, [id]);
 
   const handleStatusChange = async (newStatus) => updateLead(id, { status: newStatus });
@@ -617,7 +625,7 @@ const LeadDetail = () => {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
               <h3 className="text-sm font-bold text-gray-800 mb-3">Assignment & Stage</h3>
               <div className="space-y-3">
-                {/* Assigned To — admin only; employees cannot reassign */}
+                {/* Assigned To — Admin or Manager with canAssignLeads */}
                 {user?.role === 'ADMIN' ? (
                   <div>
                     <label className="text-xs font-semibold text-gray-600 block mb-1">Assigned To</label>
@@ -627,6 +635,18 @@ const LeadDetail = () => {
                       {users.map(u => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
                     </select>
                   </div>
+                ) : (user?.permissions?.canAssignLeads ? (
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 block mb-1">Assigned To (Team)</label>
+                    <select value={assignedTo?.id || ''} onChange={e => handleAssign(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+                      {assignedTo && !subordinates.find(s => s.id === assignedTo.id) && assignedTo.id !== user.id && (
+                        <option value={assignedTo.id}>{assignedTo.firstName} {assignedTo.lastName}</option>
+                      )}
+                      <option value={user.id}>Me ({user.firstName})</option>
+                      {subordinates.map(u => <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>)}
+                    </select>
+                  </div>
                 ) : (
                   <div>
                     <label className="text-xs font-semibold text-gray-600 block mb-1">Assigned To</label>
@@ -634,7 +654,7 @@ const LeadDetail = () => {
                       {assignedTo ? `${assignedTo.firstName} ${assignedTo.lastName}` : 'Unassigned'}
                     </div>
                   </div>
-                )}
+                ))}
                 <div>
                   <label className="text-xs font-semibold text-gray-600 block mb-1">Lead Stage</label>
                   <select value={currentLead.status} onChange={e => handleStatusChange(e.target.value)}

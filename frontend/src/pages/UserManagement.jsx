@@ -2,29 +2,80 @@ import { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { useUserStore } from '../stores/userStore';
 import { useAuthStore } from '../stores/authStore';
-import { Users, ShieldAlert, Edit, Ban, CheckCircle, Plus } from 'lucide-react';
+import {
+  Users, ShieldAlert, Edit, Ban, CheckCircle, Plus, X, Shield,
+  GitBranch, ChevronDown, ChevronUp, Clock, History
+} from 'lucide-react';
+
+// All toggleable modules (Dashboard always ON, Settings/UserMgmt admin-only)
+const ALL_MODULES = [
+  { key: 'LEADS', label: 'Leads' },
+  { key: 'QUOTATIONS', label: 'Quotations' },
+  { key: 'SALES', label: 'Sales' },
+  { key: 'PRODUCTS', label: 'Products' },
+  { key: 'PURCHASE', label: 'Purchase' },
+  { key: 'INVENTORY', label: 'Inventory' },
+  { key: 'TASKS', label: 'Tasks' },
+  { key: 'DAILY_REPORTS', label: 'Daily Reports' },
+  { key: 'SALES_TARGETS', label: 'Sales Targets' },
+  { key: 'TODO', label: 'My To-Do List' },
+  { key: 'EMPLOYEE_TRACKING', label: 'Employee Tracking' },
+];
+
+const DEFAULT_PERMISSIONS = {
+  modules: {
+    LEADS: false, QUOTATIONS: false, SALES: false, PRODUCTS: false,
+    PURCHASE: false, INVENTORY: false, TASKS: false, DAILY_REPORTS: false,
+    SALES_TARGETS: false, TODO: false, EMPLOYEE_TRACKING: false,
+  },
+  canAssignTasks: false,
+  canAssignLeads: false,
+  canViewSubordinates: false,
+};
+
+const Toggle = ({ checked, onChange, label, disabled }) => (
+  <label className={`flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg hover:bg-gray-50 transition-colors ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}>
+    <span className="text-sm text-gray-700">{label}</span>
+    <div
+      onClick={() => !disabled && onChange(!checked)}
+      className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${checked ? 'bg-green-500' : 'bg-gray-300'} ${disabled ? '' : 'cursor-pointer'}`}
+    >
+      <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
+    </div>
+  </label>
+);
+
+const PermBadge = ({ label, color = 'blue' }) => {
+  const colors = {
+    blue: 'bg-blue-100 text-blue-700',
+    green: 'bg-green-100 text-green-700',
+    purple: 'bg-purple-100 text-purple-700',
+    orange: 'bg-orange-100 text-orange-700',
+  };
+  return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold ${colors[color]}`}>{label}</span>;
+};
 
 export default function UserManagement() {
   const { user } = useAuthStore();
-  const { users, isLoading, fetchUsers, createUser, updateUser } = useUserStore();
+  const { users, isLoading, fetchUsers, createUser, updateUser, fetchPermissionAuditLogs } = useUserStore();
 
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
-  
+  const [modalTab, setModalTab] = useState('basic'); // basic | hierarchy | modules | elevated
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [showAudit, setShowAudit] = useState(null);
+  const [filterModule, setFilterModule] = useState('');
+
   const [form, setForm] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    phone: '',
-    password: '',
-    role: 'EMPLOYEE'
+    firstName: '', lastName: '', email: '', phone: '', password: '', role: 'EMPLOYEE'
   });
+  const [managerId, setManagerId] = useState('');
+  const [delegatedManagerId, setDelegatedManagerId] = useState('');
+  const [delegationExpiresAt, setDelegationExpiresAt] = useState('');
+  const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  useEffect(() => { fetchUsers(); }, []);
 
-  // Make sure only admins can render this effectively, others will be blocked by API anyway
   if (user?.role !== 'ADMIN') {
     return (
       <Layout>
@@ -38,25 +89,41 @@ export default function UserManagement() {
   }
 
   const handleOpenModal = (u = null) => {
+    setModalTab('basic');
     if (u) {
       setEditingUser(u);
       setForm({ firstName: u.firstName, lastName: u.lastName, email: u.email, phone: u.phone || '', role: u.role, password: '' });
+      setManagerId(u.managerId || '');
+      setDelegatedManagerId(u.delegatedManagerId || '');
+      setDelegationExpiresAt(u.delegationExpiresAt ? u.delegationExpiresAt.slice(0, 16) : '');
+      const savedPerms = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : DEFAULT_PERMISSIONS;
+      setPermissions({ ...DEFAULT_PERMISSIONS, ...savedPerms, modules: { ...DEFAULT_PERMISSIONS.modules, ...(savedPerms.modules || {}) } });
     } else {
       setEditingUser(null);
       setForm({ firstName: '', lastName: '', email: '', phone: '', role: 'EMPLOYEE', password: '' });
+      setManagerId('');
+      setDelegatedManagerId('');
+      setDelegationExpiresAt('');
+      setPermissions(DEFAULT_PERMISSIONS);
     }
     setShowModal(true);
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
+    const payload = {
+      ...form,
+      managerId: managerId || null,
+      delegatedManagerId: delegatedManagerId || null,
+      delegationExpiresAt: delegationExpiresAt || null,
+      permissions: form.role === 'ADMIN' ? null : permissions,
+    };
+    if (!payload.password) delete payload.password;
+
     if (editingUser) {
-      // Don't send empty password if not changing
-      const data = { ...form };
-      if (!data.password) delete data.password;
-      await updateUser(editingUser.id, data);
+      await updateUser(editingUser.id, payload);
     } else {
-      await createUser(form);
+      await createUser(payload);
     }
     setShowModal(false);
   };
@@ -68,12 +135,44 @@ export default function UserManagement() {
     }
   };
 
+  const handleShowAudit = async (userId) => {
+    if (showAudit === userId) { setShowAudit(null); return; }
+    const logs = await fetchPermissionAuditLogs(userId);
+    setAuditLogs(logs);
+    setShowAudit(userId);
+  };
+
+  const setModule = (key, val) => setPermissions(p => ({ ...p, modules: { ...p.modules, [key]: val } }));
+  const setElevated = (key, val) => setPermissions(p => ({ ...p, [key]: val }));
+
+  const getActiveModules = (u) => {
+    if (u.role === 'ADMIN') return null;
+    const perms = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null;
+    if (!perms) return [];
+    return Object.entries(perms.modules || {}).filter(([, v]) => v).map(([k]) => k);
+  };
+
+  const filteredUsers = filterModule
+    ? users.filter(u => {
+        if (u.role === 'ADMIN') return false;
+        const mods = getActiveModules(u) || [];
+        return mods.includes(filterModule);
+      })
+    : users;
+
+  const MODAL_TABS = [
+    { id: 'basic', label: 'Basic Details', icon: '👤' },
+    { id: 'hierarchy', label: 'Hierarchy', icon: '🌿' },
+    { id: 'modules', label: 'Module Access', icon: '🔲', hidden: form.role === 'ADMIN' },
+    { id: 'elevated', label: 'Elevated Perms', icon: '⚡', hidden: form.role === 'ADMIN' },
+  ].filter(t => !t.hidden);
+
   return (
     <Layout>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Manage employees, roles and access status</p>
+          <p className="text-sm text-gray-500 mt-0.5">Manage employees, hierarchy, roles and module access</p>
         </div>
         <button
           onClick={() => handleOpenModal()}
@@ -83,97 +182,303 @@ export default function UserManagement() {
         </button>
       </div>
 
+      {/* Filter bar */}
+      <div className="flex items-center gap-3 mb-4">
+        <span className="text-xs font-semibold text-gray-500 uppercase">Filter by module:</span>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => setFilterModule('')}
+            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${!filterModule ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >All</button>
+          {ALL_MODULES.map(m => (
+            <button
+              key={m.key}
+              onClick={() => setFilterModule(filterModule === m.key ? '' : m.key)}
+              className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${filterModule === m.key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            >{m.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* User Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <table className="w-full text-sm text-left">
           <thead className="bg-gray-50 text-gray-500 text-xs uppercase font-semibold">
             <tr>
               <th className="px-5 py-4">Employee</th>
-              <th className="px-5 py-4">Role</th>
+              <th className="px-5 py-4">Reports To</th>
+              <th className="px-5 py-4">Modules & Permissions</th>
               <th className="px-5 py-4">Status</th>
               <th className="px-5 py-4 text-center">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {users.map(u => (
-              <tr key={u.id} className="hover:bg-gray-50">
-                <td className="px-5 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
-                      {u.firstName[0]}
+            {filteredUsers.map(u => {
+              const activeMods = getActiveModules(u);
+              const perms = u.permissions ? (typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions) : null;
+              const manager = users.find(m => m.id === u.managerId);
+              return (
+                <tr key={u.id} className="hover:bg-gray-50">
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-sm ${u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                        {u.firstName[0]}
+                      </div>
+                      <div>
+                        <div className="font-bold text-gray-900">{u.firstName} {u.lastName}</div>
+                        <div className="text-xs text-gray-500">{u.email}</div>
+                        <span className={`mt-0.5 inline-block px-1.5 py-0.5 text-[9px] uppercase font-bold rounded ${u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>{u.role}</span>
+                      </div>
                     </div>
-                    <div>
-                      <div className="font-bold text-gray-900">{u.firstName} {u.lastName}</div>
-                      <div className="text-xs text-gray-500">{u.email}</div>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-gray-600">
+                    {manager ? (
+                      <span className="flex items-center gap-1.5">
+                        <GitBranch size={12} className="text-gray-400" />
+                        {manager.firstName} {manager.lastName}
+                      </span>
+                    ) : <span className="text-gray-300 text-xs">— No manager</span>}
+                  </td>
+                  <td className="px-5 py-4">
+                    {u.role === 'ADMIN' ? (
+                      <span className="text-purple-600 text-xs font-bold flex items-center gap-1"><Shield size={12}/> Full Admin Access</span>
+                    ) : activeMods === null || !perms ? (
+                      <span className="text-gray-300 text-xs">No permissions set</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {activeMods.slice(0, 4).map(k => <PermBadge key={k} label={k.replace('_', ' ')} color="blue" />)}
+                        {activeMods.length > 4 && <PermBadge label={`+${activeMods.length - 4}`} color="blue" />}
+                        {perms.canAssignTasks && <PermBadge label="Assign Tasks" color="orange" />}
+                        {perms.canAssignLeads && <PermBadge label="Assign Leads" color="green" />}
+                        {perms.canViewSubordinates && <PermBadge label="Team View" color="purple" />}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-5 py-4">
+                    <span className={`flex items-center gap-1 text-xs font-semibold w-max ${u.status === 'ACTIVE' ? 'text-green-700' : 'text-red-600'}`}>
+                      {u.status === 'ACTIVE' ? <CheckCircle size={13}/> : <Ban size={13}/>} {u.status}
+                    </span>
+                  </td>
+                  <td className="px-5 py-4 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <button onClick={() => handleOpenModal(u)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded" title="Edit Permissions">
+                        <Edit size={15} />
+                      </button>
+                      <button onClick={() => handleShowAudit(u.id)} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded" title="Audit Log">
+                        <History size={15} />
+                      </button>
+                      {u.id !== user.id && (
+                        <button onClick={() => toggleStatus(u)} className={`p-1.5 rounded ${u.status === 'ACTIVE' ? 'text-gray-400 hover:text-red-600' : 'text-red-400 hover:text-green-600'}`} title={u.status === 'ACTIVE' ? 'Suspend' : 'Restore'}>
+                          {u.status === 'ACTIVE' ? <Ban size={15}/> : <CheckCircle size={15}/>}
+                        </button>
+                      )}
                     </div>
-                  </div>
-                </td>
-                <td className="px-5 py-4">
-                  <span className={`px-2 py-1 text-[10px] uppercase font-bold rounded ${u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>
-                    {u.role}
-                  </span>
-                </td>
-                <td className="px-5 py-4">
-                  <span className={`px-2 py-1 text-xs font-semibold rounded flex items-center gap-1 w-max ${u.status === 'ACTIVE' ? 'text-green-700' : 'text-red-600'}`}>
-                    {u.status === 'ACTIVE' ? <CheckCircle size={14}/> : <Ban size={14}/>} {u.status}
-                  </span>
-                </td>
-                <td className="px-5 py-4 text-center">
-                  <button onClick={() => handleOpenModal(u)} className="p-1.5 text-gray-400 hover:text-blue-600 mr-2" title="Edit">
-                    <Edit size={16} />
-                  </button>
-                  {u.id !== user.id && (
-                    <button onClick={() => toggleStatus(u)} className={`p-1.5 ${u.status === 'ACTIVE' ? 'text-gray-400 hover:text-red-600' : 'text-red-500 hover:text-green-600'}`} title={u.status === 'ACTIVE' ? 'Suspend Access' : 'Restore Access'}>
-                      {u.status === 'ACTIVE' ? <Ban size={16} /> : <CheckCircle size={16} />}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between bg-gray-50">
-              <h2 className="font-bold text-lg">{editingUser ? 'Edit User' : 'New Employee'}</h2>
-              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-black">✕</button>
+      {/* Audit Log Inline Panel */}
+      {showAudit && (
+        <div className="mt-4 bg-white rounded-xl border border-indigo-100 shadow-sm p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2"><History size={16} className="text-indigo-500" /> Permission Audit Log — {users.find(u => u.id === showAudit)?.firstName}</h3>
+            <button onClick={() => setShowAudit(null)} className="text-gray-400 hover:text-black"><X size={16}/></button>
+          </div>
+          {auditLogs.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-6">No permission changes recorded yet.</p>
+          ) : (
+            <div className="space-y-3 max-h-64 overflow-y-auto">
+              {auditLogs.map(log => (
+                <div key={log.id} className="border border-gray-100 rounded-lg p-3 bg-gray-50">
+                  <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                    <span className="font-semibold text-gray-700">Changed by: {log.changedBy?.firstName} {log.changedBy?.lastName}</span>
+                    <span className="flex items-center gap-1"><Clock size={11}/> {new Date(log.timestamp).toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-red-50 border border-red-100 rounded p-2">
+                      <div className="font-bold text-red-600 mb-1">Before</div>
+                      <pre className="text-gray-600 whitespace-pre-wrap text-[10px]">{JSON.stringify(log.previousState, null, 2)}</pre>
+                    </div>
+                    <div className="bg-green-50 border border-green-100 rounded p-2">
+                      <div className="font-bold text-green-600 mb-1">After</div>
+                      <pre className="text-gray-600 whitespace-pre-wrap text-[10px]">{JSON.stringify(log.newState, null, 2)}</pre>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
-            <form onSubmit={handleSave} className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-semibold block mb-1">First Name</label>
-                  <input required value={form.firstName} onChange={e=>setForm({...form, firstName: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold block mb-1">Last Name</label>
-                  <input required value={form.lastName} onChange={e=>setForm({...form, lastName: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" />
-                </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 flex-shrink-0">
+              <h2 className="font-bold text-lg">{editingUser ? `Edit — ${editingUser.firstName}` : 'New Employee'}</h2>
+              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-black"><X size={18}/></button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-gray-100 flex-shrink-0 bg-white overflow-x-auto">
+              {MODAL_TABS.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setModalTab(t.id)}
+                  className={`px-4 py-3 text-xs font-semibold whitespace-nowrap transition-colors ${modalTab === t.id ? 'border-b-2 border-green-500 text-green-700 bg-green-50' : 'text-gray-500 hover:text-gray-700'}`}
+                >
+                  {t.icon} {t.label}
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleSave} className="flex flex-col flex-1 overflow-hidden">
+              <div className="p-6 space-y-4 overflow-y-auto flex-1">
+
+                {/* Tab: Basic Details */}
+                {modalTab === 'basic' && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-xs font-semibold block mb-1">First Name</label>
+                        <input required value={form.firstName} onChange={e => setForm({ ...form, firstName: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold block mb-1">Last Name</label>
+                        <input required value={form.lastName} onChange={e => setForm({ ...form, lastName: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold block mb-1">Email <span className="text-gray-400 font-normal">(Login ID)</span></label>
+                      <input type="email" required disabled={!!editingUser} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500 disabled:bg-gray-50" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold block mb-1">Phone</label>
+                      <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold block mb-1">System Role</label>
+                      <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500">
+                        <option value="EMPLOYEE">Employee</option>
+                        <option value="ADMIN">System Admin (Full Access)</option>
+                      </select>
+                      {form.role === 'ADMIN' && <p className="text-[10px] text-purple-600 mt-1">⚠️ Admin users bypass all module restrictions and have full system access.</p>}
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold block mb-1">
+                        Password {editingUser && <span className="text-gray-400 font-normal text-[10px]">(Leave blank to keep current)</span>}
+                      </label>
+                      <input required={!editingUser} type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" minLength={6} />
+                    </div>
+                  </>
+                )}
+
+                {/* Tab: Hierarchy */}
+                {modalTab === 'hierarchy' && (
+                  <>
+                    <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-xs text-blue-700 mb-2">
+                      <p className="font-semibold mb-1">🌿 Reporting Hierarchy</p>
+                      <p>Setting a manager defines who this employee reports to. Managers with elevated permissions will have cascading visibility over all their direct and deep subordinates.</p>
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold block mb-1">Reports To (Manager)</label>
+                      <select value={managerId} onChange={e => setManagerId(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500">
+                        <option value="">— No Manager (Top Level)</option>
+                        {users.filter(u => u.id !== editingUser?.id).map(u => (
+                          <option key={u.id} value={u.id}>{u.firstName} {u.lastName} ({u.role})</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="border-t border-gray-100 pt-4 mt-2">
+                      <p className="text-xs font-bold text-gray-700 mb-1 flex items-center gap-2">
+                        <Clock size={13} className="text-orange-500"/> Temporary Delegated Authority
+                      </p>
+                      <p className="text-[11px] text-gray-500 mb-3">Temporarily grant this employee the reporting access of another manager (e.g., during leave).</p>
+                      <div>
+                        <label className="text-xs font-semibold block mb-1">Acting As Manager Of</label>
+                        <select value={delegatedManagerId} onChange={e => setDelegatedManagerId(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-orange-400">
+                          <option value="">— No Delegation</option>
+                          {users.filter(u => u.id !== editingUser?.id).map(u => (
+                            <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                          ))}
+                        </select>
+                      </div>
+                      {delegatedManagerId && (
+                        <div className="mt-3">
+                          <label className="text-xs font-semibold block mb-1">Delegation Expires At</label>
+                          <input type="datetime-local" value={delegationExpiresAt} onChange={e => setDelegationExpiresAt(e.target.value)} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-orange-400" />
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* Tab: Module Access */}
+                {modalTab === 'modules' && (
+                  <>
+                    <div className="bg-green-50 border border-green-100 rounded-xl p-3 text-xs text-green-700 mb-2">
+                      Modules toggled OFF will be completely hidden from this user's navigation and interface.
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      <Toggle label="🏠 Dashboard" checked={true} onChange={() => {}} disabled={true} />
+                      {ALL_MODULES.map(m => (
+                        <Toggle
+                          key={m.key}
+                          label={m.label}
+                          checked={permissions.modules[m.key] || false}
+                          onChange={v => setModule(m.key, v)}
+                        />
+                      ))}
+                      <Toggle label="⚙️ Settings (Admin Only)" checked={false} onChange={() => {}} disabled={true} />
+                      <Toggle label="👥 User Management (Admin Only)" checked={false} onChange={() => {}} disabled={true} />
+                    </div>
+                  </>
+                )}
+
+                {/* Tab: Elevated Permissions */}
+                {modalTab === 'elevated' && (
+                  <>
+                    <div className="bg-orange-50 border border-orange-100 rounded-xl p-3 text-xs text-orange-700 mb-2">
+                      These permissions grant managerial capabilities to non-admin users. They only work if a reporting hierarchy is configured.
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      <div className="py-3">
+                        <Toggle
+                          label="⚡ Task Assignment — Can assign tasks to subordinates"
+                          checked={permissions.canAssignTasks}
+                          onChange={v => setElevated('canAssignTasks', v)}
+                        />
+                      </div>
+                      <div className="py-3">
+                        <Toggle
+                          label="🎯 Lead Assignment — Can assign leads to subordinates"
+                          checked={permissions.canAssignLeads}
+                          onChange={v => setElevated('canAssignLeads', v)}
+                        />
+                      </div>
+                      <div className="py-3">
+                        <Toggle
+                          label="👁️ Team View — Can view subordinate activity in Employee Tracking"
+                          checked={permissions.canViewSubordinates}
+                          onChange={v => setElevated('canViewSubordinates', v)}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
-              <div>
-                <label className="text-xs font-semibold block mb-1">Email <span className="text-gray-400 font-normal">(Login ID)</span></label>
-                <input type="email" required disabled={!!editingUser} value={form.email} onChange={e=>setForm({...form, email: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500 disabled:bg-gray-50" />
+
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex-shrink-0">
+                <button disabled={isLoading} type="submit" className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg disabled:opacity-50 transition-colors">
+                  {isLoading ? 'Saving...' : `Save ${editingUser ? 'Changes' : 'Employee'}`}
+                </button>
               </div>
-              <div>
-                <label className="text-xs font-semibold block mb-1">Phone</label>
-                <input value={form.phone} onChange={e=>setForm({...form, phone: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" />
-              </div>
-              <div>
-                <label className="text-xs font-semibold block mb-1">Role</label>
-                <select value={form.role} onChange={e=>setForm({...form, role: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500">
-                  <option value="EMPLOYEE">Employee</option>
-                  <option value="ADMIN">System Admin</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-semibold block mb-1">Password {editingUser && <span className="text-gray-400 font-normal text-[10px]">(Leave blank to keep current)</span>}</label>
-                <input required={!editingUser} type="password" value={form.password} onChange={e=>setForm({...form, password: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:border-green-500" minLength={6} />
-              </div>
-              
-              <button disabled={isLoading} type="submit" className="w-full py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg mt-4 disabled:opacity-50">
-                {isLoading ? 'Saving...' : 'Save User'}
-              </button>
             </form>
           </div>
         </div>

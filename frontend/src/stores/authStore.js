@@ -37,11 +37,29 @@ export const useAuthStore = create(
         set({ user: null, token: null, isAuthenticated: false });
       },
 
-      checkAuth: () => {
+      // Called on every app startup — first restores session from localStorage,
+      // then refreshes the user object from the server so permissions are always fresh.
+      checkAuth: async () => {
         const token = localStorage.getItem('token');
-        const user = localStorage.getItem('user');
-        if (token && user) {
-          set({ token, user: JSON.parse(user), isAuthenticated: true });
+        const cachedUser = localStorage.getItem('user');
+        if (!token || !cachedUser) return;
+
+        // Immediately restore session so the app doesn't flash to /login
+        set({ token, user: JSON.parse(cachedUser), isAuthenticated: true });
+
+        // Then fetch the latest user data (with up-to-date permissions) from the server
+        try {
+          const res = await api.get('/auth/me');
+          if (res.data?.data) {
+            const freshUser = res.data.data;
+            localStorage.setItem('user', JSON.stringify(freshUser));
+            set({ user: freshUser });
+          }
+        } catch {
+          // If /me fails (e.g. token expired), log out
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          set({ user: null, token: null, isAuthenticated: false });
         }
       },
 

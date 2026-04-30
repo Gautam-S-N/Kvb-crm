@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import api from '../services/api';
 
-export const useUserStore = create((set) => ({
+export const useUserStore = create((set, get) => ({
   users: [],
   isLoading: false,
   error: null,
@@ -41,5 +41,23 @@ export const useUserStore = create((set) => ({
       set({ error: err.response?.data?.message, isLoading: false });
       return { success: false, error: err.response?.data?.message };
     }
-  }
+  },
+
+  fetchSubordinates: async () => {
+    try {
+      const res = await api.get('/users/subordinates/list');
+      return res.data.data || [];
+    } catch (err) {
+      return [];
+    }
+  },
+
+  fetchPermissionAuditLogs: async (userId) => {
+    try {
+      const res = await api.get(`/users/${userId}/audit`);
+      return res.data.data || [];
+    } catch (err) {
+      return [];
+    }
+  },
 }));

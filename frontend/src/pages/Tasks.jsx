@@ -36,7 +36,9 @@ const PRIORITY_DOT = {
 export default function Tasks() {
   const { user } = useAuthStore();
   const { tasks, isLoading, fetchTasks, createTask, completeTask, failTask } = useTaskStore();
-  const { users, fetchUsers } = useUserStore();
+  const { users, fetchUsers, fetchSubordinates } = useUserStore();
+
+  const [subordinates, setSubordinates] = useState([]);
 
   const [search, setSearch]         = useState('');
   const [statusFilter, setStatus]   = useState('');
@@ -70,6 +72,9 @@ export default function Tasks() {
   useEffect(() => {
     fetchTasks();
     fetchUsers();
+    if (user?.role !== 'ADMIN') {
+      fetchSubordinates().then(setSubordinates);
+    }
   }, []);
 
   const handleSearch = (e) => {
@@ -345,8 +350,20 @@ export default function Tasks() {
                       ))}
                     </select>
                   </div>
+                ) : user?.permissions?.canAssignTasks ? (
+                  <div>
+                    <label className="text-xs font-bold text-gray-700 block mb-1">Assign To (Team) *</label>
+                    <select required value={assignForm.assignedToId}
+                      onChange={e => setAssignForm({ ...assignForm, assignedToId: e.target.value })}
+                      className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-green-500">
+                      <option value={user.id}>Me ({user.firstName})</option>
+                      {subordinates.map(u => (
+                        <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                      ))}
+                    </select>
+                  </div>
                 ) : (
-                  /* Employees always self-assign — set hidden value on mount */
+                  /* Regular Employees always self-assign */
                   <input type="hidden" value={user?.id || ''} ref={el => { if (el && !assignForm.assignedToId) setAssignForm(f => ({ ...f, assignedToId: user?.id || '' })); }} />
                 )}
                 <div>

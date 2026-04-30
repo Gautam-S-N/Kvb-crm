@@ -28,21 +28,34 @@ import {
 } from 'lucide-react';
 
 const navItems = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', roles: ['ADMIN', 'EMPLOYEE', 'USER'] },
-  { to: '/leads', icon: Users, label: 'Leads', roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/quotations', icon: Receipt, label: 'Quotations', roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/sales', icon: ShoppingCart, label: 'Sales', roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/products', icon: Package, label: 'Products', roles: ['ADMIN'] },
-  { to: '/purchase', icon: Truck, label: 'Purchase', roles: ['ADMIN'] },
-  { to: '/inventory', icon: Package, label: 'Inventory', roles: ['ADMIN'] },
-  { to: '/tasks', icon: CheckSquare, label: 'Tasks', roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/daily-reports', icon: BarChart2, label: 'Daily Reports', roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/targets', icon: Target, label: 'Sales Targets', roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/settings',          icon: Settings,        label: 'Settings',             roles: ['ADMIN'] },
-  { to: '/users',             icon: UserCog,         label: 'User Management',      roles: ['ADMIN'] },
-  { to: '/todo-list',          icon: ClipboardList,   label: 'My To-Do List',         roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/employee-tracking',  icon: UserCheck,        label: 'Employee Tracking',     roles: ['ADMIN'] },
+  { to: '/dashboard',          icon: LayoutDashboard, label: 'Dashboard',          roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/leads',              icon: Users,           label: 'Leads',              roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/quotations',         icon: Receipt,         label: 'Quotations',         roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/sales',              icon: ShoppingCart,    label: 'Sales',              roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/products',           icon: Package,         label: 'Products',           roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/purchase',           icon: Truck,           label: 'Purchase',           roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/inventory',          icon: Package,         label: 'Inventory',          roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/tasks',              icon: CheckSquare,     label: 'Tasks',              roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/daily-reports',      icon: BarChart2,       label: 'Daily Reports',      roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/targets',            icon: Target,          label: 'Sales Targets',      roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/todo-list',          icon: ClipboardList,   label: 'My To-Do List',      roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/employee-tracking',  icon: UserCheck,       label: 'Employee Tracking',  roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/settings',           icon: Settings,        label: 'Settings',           roles: ['ADMIN'] },
+  { to: '/users',              icon: UserCog,         label: 'User Management',    roles: ['ADMIN'] },
 ];
+const NAV_MODULE_KEY = {
+  '/leads':             'LEADS',
+  '/quotations':        'QUOTATIONS',
+  '/sales':             'SALES',
+  '/products':          'PRODUCTS',
+  '/purchase':          'PURCHASE',
+  '/inventory':         'INVENTORY',
+  '/tasks':             'TASKS',
+  '/daily-reports':     'DAILY_REPORTS',
+  '/targets':           'SALES_TARGETS',
+  '/todo-list':         'TODO',
+  '/employee-tracking': 'EMPLOYEE_TRACKING',
+};
 
 // Dark mode helpers
 const applyTheme = (mode) => {
@@ -83,7 +96,18 @@ const Layout = ({ children }) => {
     navigate('/login');
   };
 
-  const filteredNav = navItems.filter(item => item.roles.includes(user?.role));
+  const filteredNav = navItems.filter(item => {
+    if (!item.roles.includes(user?.role)) return false;
+    if (user?.role === 'ADMIN') return true;
+    const moduleKey = NAV_MODULE_KEY[item.to];
+    // Items with no module key (Dashboard) are always shown
+    if (!moduleKey) return true;
+    const perms = user?.permissions
+      ? (typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions)
+      : null;
+    return perms?.modules?.[moduleKey] === true;
+  });
+
 
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900 overflow-hidden">
