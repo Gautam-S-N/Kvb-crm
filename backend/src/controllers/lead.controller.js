@@ -1,5 +1,7 @@
 const prisma = require('../utils/db');
 
+const { getSubordinateIds } = require('../middleware/permission.middleware');
+
 // Get all leads with filters
 exports.getLeads = async (req, res) => {
   try {
@@ -9,7 +11,10 @@ exports.getLeads = async (req, res) => {
     
     // Role-based filtering
     if (req.user.role === 'EMPLOYEE') {
-      where.assignedToId = req.user.id;
+      const validUserIds = await getSubordinateIds(req.user.id, true);
+      validUserIds.push(req.user.id);
+      
+      where.assignedToId = { in: validUserIds };
     } else if (req.user.role === 'USER') {
       where.createdById = req.user.id;
     }

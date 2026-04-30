@@ -27,7 +27,7 @@ exports.register = async (req, res) => {
         phone,
         role: role || 'USER'
       },
-      select: { id, email, firstName, lastName, role, status, createdAt }
+      select: { id: true, email: true, firstName: true, lastName: true, role: true, status: true, createdAt: true }
     });
 
     res.status(201).json({
@@ -96,7 +96,7 @@ exports.me = async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id, email, firstName, lastName, phone, role, status, avatar, lastLoginAt, createdAt }
+      select: { id: true, email: true, firstName: true, lastName: true, phone: true, role: true, status: true, avatar: true, lastLoginAt: true, createdAt: true, permissions: true, managerId: true, delegatedManagerId: true }
     });
 
     res.json({ success: true, data: user });

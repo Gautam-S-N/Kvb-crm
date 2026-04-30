@@ -37,6 +37,20 @@ model User {
   updatedAt       DateTime    @updatedAt
   lastLoginAt     DateTime?
 
+  // Hierarchy
+  managerId           String?
+  manager             User?    @relation("UserToManager", fields: [managerId], references: [id])
+  subordinates        User[]   @relation("UserToManager")
+
+  // Permissions (Module visibility + Elevated abilities)
+  permissions         Json?
+
+  // Delegated Authority (Temporary Access)
+  delegatedManagerId  String?
+  delegatedManager    User?    @relation("DelegatedManager", fields: [delegatedManagerId], references: [id])
+  delegates           User[]   @relation("DelegatedManager")
+  delegationExpiresAt DateTime?
+
   // Relations
   leadsCreated    Lead[]      @relation("LeadCreator")
   leadsAssigned   Lead[]      @relation("LeadAssignee")
@@ -55,8 +69,26 @@ model User {
   // Missing relations added
   leadTimelines   LeadTimeline[]
   purchaseOrders  PurchaseOrder[]
+  
+  // RBAC Relations
+  permissionAuditsTarget  UserPermissionAuditLog[] @relation("AuditTarget")
+  permissionAuditsChanger UserPermissionAuditLog[] @relation("AuditChanger")
 
   @@map("users")
+}
+
+model UserPermissionAuditLog {
+  id              String   @id @default(uuid())
+  targetUserId    String
+  targetUser      User     @relation("AuditTarget", fields: [targetUserId], references: [id])
+  changedById     String
+  changedBy       User     @relation("AuditChanger", fields: [changedById], references: [id])
+  previousState   Json?
+  newState        Json?
+  timestamp       DateTime @default(now())
+
+  @@index([targetUserId])
+  @@map("user_permission_audit_logs")
 }
 
 // ============================================

@@ -1,4 +1,5 @@
 const prisma = require('../utils/db');
+const { getSubordinateIds } = require('../middleware/permission.middleware');
 
 const generateTaskId = () => `task_${Date.now()}`;
 
@@ -11,11 +12,17 @@ exports.getTasks = async (req, res) => {
     let where = {};
 
     if (req.user.role === 'EMPLOYEE') {
-      // Employees only see TEAM tasks assigned to them
-      where.assignedToId = userId;
+      // Employees see TEAM tasks assigned to them or their cascading subordinates
+      const validUserIds = await getSubordinateIds(userId, true);
+      validUserIds.push(userId);
+
       where.type = 'TEAM';
-    } else {
-      // Admins see only TEAM tasks (PERSONAL todos are separate in /todos)
+      where.OR = [
+        { assignedToId: { in: validUserIds } },
+        { createdById: userId }
+      ];
+    } else if (req.user.role === 'ADMIN') {
+      // Admins see all TEAM tasks (PERSONAL todos are separate in /todos)
       where.type = 'TEAM';
     }
 
@@ -26,8 +33,15 @@ exports.getTasks = async (req, res) => {
     if (assignedToId) {
       // Narrow results to a specific assignee (used by EmployeeTracking expand)
       if (where.OR) {
-        // Combine: must be TEAM type AND match the assignee
-        where = { assignedToId, type: 'TEAM' };
+        // If OR already exists from role check, wrap everything in an AND
+        where = {
+          AND: [
+            { OR: where.OR },
+            { assignedToId, type: 'TEAM' }
+          ]
+        };
+        delete where.OR; // cleanup top-level OR
+        delete where.type; 
       } else {
         where.assignedToId = assignedToId;
       }
@@ -314,11 +328,21 @@ exports.deleteTask = async (req, res) => {
   }
 };
 
-// GET /api/tasks/stats — employee-wise performance stats (admin only)
+// GET /api/tasks/stats — employee-wise performance stats (admin/manager view)
 exports.getTaskStats = async (req, res) => {
   try {
+    let targetIds = [];
+    if (req.user.role === 'ADMIN') {
+      const allEmps = await prisma.user.findMany({ where: { role: 'EMPLOYEE', status: 'ACTIVE' }, select: { id: true } });
+      targetIds = allEmps.map(u => u.id);
+    } else {
+      targetIds = await getSubordinateIds(req.user.id, true);
+    }
+
+    if (targetIds.length === 0) return res.json({ success: true, data: [] });
+
     const employees = await prisma.user.findMany({
-      where: { role: 'EMPLOYEE', status: 'ACTIVE' },
+      where: { id: { in: targetIds }, status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true }
     });
 
