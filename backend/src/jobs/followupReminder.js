@@ -1,71 +1,62 @@
 const cron = require('node-cron');
 
 const startFollowUpReminderJob = (app) => {
-  // Run everyday at 08:00 AM to check for follow-ups scheduled for the current day
-  cron.schedule('0 8 * * *', async () => {
-    console.log('[CRON] Running daily Follow-up reminder check...');
+  // Run every minute to check for due follow-ups
+  cron.schedule('* * * * *', async () => {
     try {
       const { PrismaClient } = require('@prisma/client');
       const prisma = new PrismaClient();
       
       const now = new Date();
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const tomorrowStart = new Date(todayStart);
-      tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
-      // Find all pending followups scheduled for today (between 12:00 AM today and 12:00 AM tomorrow)
-      const followUps = await prisma.followUp.findMany({
+      // Find all pending followups scheduled up to now that haven't sent a reminder
+      const dueFollowUps = await prisma.followUp.findMany({
         where: {
           status: 'SCHEDULED',
-          scheduledAt: { gte: todayStart, lt: tomorrowStart }
+          scheduledAt: { lte: now },
+          reminderSent: false
         },
-        include: { lead: { select: { id: true, title: true } } }
+        include: { lead: { select: { id: true, title: true, leadNumber: true } } }
       });
 
-      if (followUps.length === 0) {
-        console.log('[CRON] No follow-ups scheduled for today.');
-        return;
-      }
-
-      // Group by assignee
-      const followUpsByEmp = {};
-      followUps.forEach(f => {
-        if (!followUpsByEmp[f.assignedToId]) followUpsByEmp[f.assignedToId] = [];
-        followUpsByEmp[f.assignedToId].push(f);
-      });
+      if (dueFollowUps.length === 0) return;
 
       const io = app.get('io');
       
-      // Emit notifications
-      for (const [employeeId, fList] of Object.entries(followUpsByEmp)) {
-        const body = `You have ${fList.length} follow-up${fList.length > 1 ? 's' : ''} scheduled for today.`;
+      for (const f of dueFollowUps) {
+        const body = `Follow-up due: ${f.description} for lead ${f.lead.leadNumber} (${f.lead.title})`;
         
         if (io) {
           io.emit('notification', {
             type: 'FOLLOW_UP_DUE',
-            title: 'Daily Follow-up Reminders',
+            title: '⏰ Lead Follow-up Reminder',
             body,
-            entityType: 'followUp',
-            entityId: fList.length === 1 ? fList[0].id : null,
-            targetUserId: employeeId
+            entityType: 'lead',
+            entityId: f.lead.id,
+            targetUserId: f.assignedToId
           });
         }
 
         await prisma.notification.create({
           data: {
-            userId: employeeId,
+            userId: f.assignedToId,
             type: 'FOLLOW_UP_DUE',
-            title: 'Daily Follow-up Reminders',
+            title: '⏰ Lead Follow-up Reminder',
             body,
-            entityType: 'followUp',
-            entityId: fList.length === 1 ? fList[0].id : null
+            entityType: 'lead',
+            entityId: f.lead.id
           }
+        });
+
+        // Mark as sent
+        await prisma.followUp.update({
+          where: { id: f.id },
+          data: { reminderSent: true }
         });
       }
 
-      console.log(`[CRON] Notified ${Object.keys(followUpsByEmp).length} employees about their follow-ups.`);
     } catch (error) {
-      console.error('[CRON] Error running FollowUp reminder sync:', error.message);
+      console.error('[FOLLOW-UP CRON] Error:', error.message);
     }
   });
 };

@@ -33,6 +33,7 @@ const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
 const leadRoutes = require('./routes/lead.routes');
 const settingRoutes = require('./routes/setting.routes');
+const notificationRoutes = require('./routes/notification.routes');
 
 const materialRoutes = require('./routes/material.routes');
 
@@ -87,18 +88,21 @@ app.use('/api/export', exportRoutes);
 app.use('/api/todos', todoRoutes);
 
 const startTargetAutomationJob = require('./jobs/targetAutomation');
+const startLeadEscalationJob = require('./jobs/leadEscalation');
 
 // Start background cron jobs
 startCronJobs();
 startFollowUpReminderJob(app);
 startTodoReminderJob(app);
 startTargetAutomationJob(app);
+startLeadEscalationJob(app);
 
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/settings', settingRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/logs', activityLogRoutes);
 
 // Health check

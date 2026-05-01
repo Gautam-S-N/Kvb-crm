@@ -7,7 +7,7 @@ import {
 } from 'recharts';
 import {
   Users, CheckCircle2, Clock, AlertTriangle, TrendingUp,
-  ChevronDown, ChevronUp, Loader2, ListChecks, ShieldAlert
+  ChevronDown, ChevronUp, Loader2, ListChecks, ShieldAlert, X
 } from 'lucide-react';
 import TaskDetailModal from '../components/TaskDetailModal';
 import { useTaskStore } from '../stores/taskStore';
@@ -213,7 +213,10 @@ export default function EmployeeTracking() {
   const [tasks, setTasks]           = useState([]);   // tasks for expanded employee
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [selectedTaskForDetail, setSelectedTaskForDetail] = useState(null);
-  
+  const [unassignedCount, setUnassignedCount] = useState(0);
+  const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
+  const [dismissedAlert, setDismissedAlert] = useState(false);
+
   const { fetchTasks } = useTaskStore();
 
   // Permission gate: admin sees all, employee needs canViewSubordinates
@@ -221,7 +224,7 @@ export default function EmployeeTracking() {
   const hasTrackingAccess = isAdmin || user?.permissions?.canViewSubordinates === true;
 
   useEffect(() => {
-    if (!hasTrackingAccess) return; // Don't fetch if no access
+    if (!hasTrackingAccess) return;
     (async () => {
       setIsLoading(true);
       try {
@@ -230,7 +233,13 @@ export default function EmployeeTracking() {
       } catch { /* ignore */ }
       setIsLoading(false);
     })();
-  }, [hasTrackingAccess]);
+    // Admin: also fetch unassigned employee count
+    if (isAdmin) {
+      api.get('/users/unassigned-count')
+        .then(r => setUnassignedCount(r.data.count || 0))
+        .catch(() => {});
+    }
+  }, [hasTrackingAccess, isAdmin]);
 
   const handleExpand = async (empId) => {
     if (expanded === empId) { setExpanded(null); setTasks([]); return; }
@@ -265,6 +274,37 @@ export default function EmployeeTracking() {
       ) : (
         <>
         <div className="max-w-6xl mx-auto">
+
+        {/* Unassigned Employee Alert Banner — Admin only */}
+        {isAdmin && unassignedCount > 0 && !dismissedAlert && (
+          <div className="mb-5 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+            <AlertTriangle size={18} className="text-amber-500 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-amber-800">
+                {unassignedCount} employee{unassignedCount > 1 ? 's have' : ' has'} no reporting structure assigned
+              </p>
+              <p className="text-xs text-amber-600 mt-0.5">
+                Unassigned employees are only visible to Admins. Assign them a manager in User Management.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setShowUnassignedOnly(v => !v)}
+                className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                  showUnassignedOnly
+                    ? 'bg-amber-500 text-white border-amber-500'
+                    : 'bg-white text-amber-700 border-amber-300 hover:bg-amber-100'
+                }`}
+              >
+                {showUnassignedOnly ? 'Show All' : 'Show Unassigned'}
+              </button>
+              <button onClick={() => setDismissedAlert(true)} className="text-amber-400 hover:text-amber-600 p-1">
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -331,38 +371,48 @@ export default function EmployeeTracking() {
               </div>
             ) : (
               <div className="space-y-4">
-                <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">Individual Performance</h2>
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                  {stats.map(s => (
-                    <div key={s.employee.id}>
-                      <EmployeeCard
-                        stat={s}
-                        onExpand={handleExpand}
-                        expanded={expanded === s.employee.id}
-                      />
-                      {/* Expanded tasks panel */}
-                      {expanded === s.employee.id && (
-                        <div className="mt-1 bg-white rounded-2xl border border-emerald-200 shadow-sm overflow-hidden animate-fade-in">
-                          <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between">
-                            <span className="text-sm font-semibold text-emerald-800">{s.employee.firstName}'s Tasks</span>
-                            <span className="text-xs text-emerald-600">{tasks.length} tasks</span>
+                <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">
+                  {showUnassignedOnly ? 'Unassigned Employees' : 'Individual Performance'}
+                </h2>
+
+                {showUnassignedOnly && stats.filter(s => !s.employee.managerId).length === 0 ? (
+                  <div className="py-12 text-center bg-amber-50 rounded-2xl border border-amber-100">
+                    <Users size={40} className="mx-auto text-amber-300 mb-3" />
+                    <p className="font-semibold text-amber-700">All employees have a manager assigned</p>
+                    <p className="text-xs text-amber-500 mt-1">No unassigned employees found.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    {(showUnassignedOnly ? stats.filter(s => !s.employee.managerId) : stats).map(s => (
+                      <div key={s.employee.id}>
+                        <EmployeeCard
+                          stat={s}
+                          onExpand={handleExpand}
+                          expanded={expanded === s.employee.id}
+                        />
+                        {expanded === s.employee.id && (
+                          <div className="mt-1 bg-white rounded-2xl border border-emerald-200 shadow-sm overflow-hidden animate-fade-in">
+                            <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between">
+                              <span className="text-sm font-semibold text-emerald-800">{s.employee.firstName}'s Tasks</span>
+                              <span className="text-xs text-emerald-600">{tasks.length} tasks</span>
+                            </div>
+                            {loadingTasks ? (
+                              <div className="flex justify-center py-8">
+                                <Loader2 size={24} className="animate-spin text-emerald-400" />
+                              </div>
+                            ) : tasks.length === 0 ? (
+                              <p className="text-center py-8 text-gray-400 text-sm">No tasks assigned.</p>
+                            ) : (
+                              <div className="max-h-64 overflow-y-auto">
+                                {tasks.map(t => <TaskRow key={t.id} task={t} onClick={setSelectedTaskForDetail} />)}
+                              </div>
+                            )}
                           </div>
-                          {loadingTasks ? (
-                            <div className="flex justify-center py-8">
-                              <Loader2 size={24} className="animate-spin text-emerald-400" />
-                            </div>
-                          ) : tasks.length === 0 ? (
-                            <p className="text-center py-8 text-gray-400 text-sm">No tasks assigned.</p>
-                          ) : (
-                            <div className="max-h-64 overflow-y-auto">
-                              {tasks.map(t => <TaskRow key={t.id} task={t} onClick={setSelectedTaskForDetail} />)}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </>

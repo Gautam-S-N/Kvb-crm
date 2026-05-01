@@ -62,6 +62,11 @@ const createTodo = async (req, res) => {
       include: { checklist: true },
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TODOS' });
+    }
+
     res.status(201).json({ success: true, data: todo });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -95,6 +100,11 @@ const updateTodo = async (req, res) => {
       include: { checklist: true },
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TODOS' });
+    }
+
     res.json({ success: true, data: todo });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -123,6 +133,11 @@ const completeTodo = async (req, res) => {
       include: { checklist: true },
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TODOS' });
+    }
+
     res.json({ success: true, data: todo });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -143,6 +158,12 @@ const deleteTodo = async (req, res) => {
     }
 
     await prisma.task.delete({ where: { id } });
+
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TODOS' });
+    }
+
     res.json({ success: true, message: 'Deleted successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -169,6 +190,11 @@ const toggleTodoChecklist = async (req, res) => {
         completedAt: !item.isCompleted ? new Date() : null,
       },
     });
+
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TODOS' });
+    }
 
     res.json({ success: true, data: updated });
   } catch (error) {

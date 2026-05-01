@@ -45,6 +45,46 @@ function App() {
 
   useEffect(() => {
     checkAuth();
+
+    const handleRefresh = async (e) => {
+      try {
+        const { module } = e.detail;
+        if (module === 'TASKS') {
+          const { useTaskStore } = await import('./stores/taskStore');
+          useTaskStore.getState().fetchTasks();
+        } else if (module === 'LEADS') {
+          const { useLeadStore } = await import('./stores/leadStore');
+          useLeadStore.getState().getLeads();
+        } else if (module === 'DASHBOARD') {
+          const { useDashboardStore } = await import('./stores/dashboardStore');
+          useDashboardStore.getState().fetchMetrics();
+          useDashboardStore.getState().fetchActivities();
+        } else if (module === 'QUOTATIONS') {
+          const { useQuotationStore } = await import('./stores/quotationStore');
+          useQuotationStore.getState().fetchQuotations();
+        } else if (module === 'SALES') {
+          const { useSaleStore } = await import('./stores/saleStore');
+          useSaleStore.getState().fetchSales();
+        } else if (module === 'PURCHASE') {
+          const { usePurchaseStore } = await import('./stores/purchaseStore');
+          usePurchaseStore.getState().fetchPurchases();
+        } else if (module === 'MATERIALS') {
+          const { useMaterialStore } = await import('./stores/materialStore');
+          useMaterialStore.getState().fetchMaterials();
+        } else if (module === 'TODOS') {
+          const { useTodoStore } = await import('./stores/todoStore');
+          useTodoStore.getState().fetchTodos();
+        } else if (module === 'TARGETS') {
+          const { useTargetStore } = await import('./stores/targetStore');
+          useTargetStore.getState().fetchTargets();
+        }
+      } catch (err) {
+        console.warn('Silent refresh failed:', err);
+      }
+    };
+
+    window.addEventListener('REFRESH_DATA', handleRefresh);
+    return () => window.removeEventListener('REFRESH_DATA', handleRefresh);
   }, [checkAuth]);
 
   return (

@@ -159,6 +159,11 @@ exports.createMaterial = async (req, res) => {
       }
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'MATERIALS' });
+    }
+
     res.status(201).json({ success: true, data: material });
   } catch (error) {
     console.error('CREATE MATERIAL ERROR:', error);
@@ -198,6 +203,11 @@ exports.updateMaterial = async (req, res) => {
       }
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'MATERIALS' });
+    }
+
     res.json({ success: true, data: material });
   } catch (error) {
     console.error('UPDATE MATERIAL ERROR:', error);
@@ -215,6 +225,11 @@ exports.deleteMaterial = async (req, res) => {
       where: { id: req.params.id }
     });
     
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'MATERIALS' });
+    }
+
     res.json({ success: true, message: 'Material deleted successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -243,6 +258,11 @@ exports.updateStock = async (req, res) => {
       data: { balance: newBalance }
     });
     
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'MATERIALS' });
+    }
+
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

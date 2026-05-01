@@ -5,9 +5,9 @@ const { authMiddleware, authorize } = require('../middleware/auth.middleware');
 
 router.use(authMiddleware);
 router.get('/',          st.getTargets);
-router.post('/',         authorize('ADMIN'), st.createTarget);
-router.put('/:id',       authorize('ADMIN'), st.updateTarget);
-router.delete('/:id',    authorize('ADMIN'), st.deleteTarget);
-router.post('/refresh',  authorize('ADMIN'), st.refreshAttainment);
+router.post('/',         authorize('ADMIN', 'EMPLOYEE'), st.createTarget);
+router.put('/:id',       authorize('ADMIN', 'EMPLOYEE'), st.updateTarget);
+router.delete('/:id',    authorize('ADMIN', 'EMPLOYEE'), st.deleteTarget);
+router.post('/refresh',  authorize('ADMIN', 'EMPLOYEE'), st.refreshAttainment);
 
 module.exports = router;

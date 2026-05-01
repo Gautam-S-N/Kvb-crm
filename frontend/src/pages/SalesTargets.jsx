@@ -28,10 +28,15 @@ export default function SalesTargets() {
     notes: ''
   });
 
+  const [allocateModal, setAllocateModal] = useState({ show: false, parentTarget: null });
+  const [allocateData, setAllocateData] = useState({ employeeId: '', revenueTarget: 0, leadsTarget: 0, quotationsTarget: 0 });
+
   useEffect(() => {
     fetchTargets();
-    if (user?.role === 'ADMIN') {
-      api.get('/users?role=EMPLOYEE').then(res => setEmployees(res.data.data));
+    if (user?.role === 'ADMIN' || user?.permissions?.canViewSubordinates) {
+      // Admins can see all employees, managers can see their subordinates
+      const url = user?.role === 'ADMIN' ? '/users?role=EMPLOYEE' : '/users/subordinates';
+      api.get(url).then(res => setEmployees(res.data.data)).catch(() => {});
     }
   }, []);
 
@@ -48,6 +53,34 @@ export default function SalesTargets() {
       setIsEditing(false);
       setEditId(null);
     }
+  };
+
+  const handleAllocateSubmit = async (e) => {
+    e.preventDefault();
+    const { parentTarget } = allocateModal;
+    const payload = {
+      employeeId: allocateData.employeeId,
+      periodType: parentTarget.periodType,
+      periodYear: parentTarget.periodYear,
+      periodNumber: parentTarget.periodNumber,
+      revenueTarget: Number(allocateData.revenueTarget),
+      leadsTarget: Number(allocateData.leadsTarget),
+      quotationsTarget: Number(allocateData.quotationsTarget),
+      parentTargetId: parentTarget.id,
+      isRecurring: parentTarget.isRecurring,
+      notes: `Allocated by ${user.firstName} ${user.lastName}`
+    };
+    
+    const res = await createTarget(payload);
+    if (res.success) {
+      setAllocateModal({ show: false, parentTarget: null });
+      fetchTargets(); // refresh to get updated subTargets
+    }
+  };
+
+  const openAllocateModal = (t) => {
+    setAllocateModal({ show: true, parentTarget: t });
+    setAllocateData({ employeeId: '', revenueTarget: '', leadsTarget: '', quotationsTarget: '' });
   };
 
   const handleEdit = (t) => {
@@ -111,7 +144,7 @@ export default function SalesTargets() {
               <RefreshCw size={20} className={isLoading ? 'animate-spin' : ''} />
             </button>
           )}
-          {user?.role === 'ADMIN' && (
+          {(user?.role === 'ADMIN' || user?.permissions?.canViewSubordinates) && (
             <button onClick={openCreateModal} className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg">
               <Plus size={18} /> New Target
             </button>
@@ -120,9 +153,9 @@ export default function SalesTargets() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-5 flex gap-3 flex-wrap">
-        {user?.role === 'ADMIN' && (
+        {(user?.role === 'ADMIN' || user?.permissions?.canViewSubordinates) && (
           <select value={employeeFilter} onChange={e => setEmployeeFilter(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500">
-            <option value="">All Employees</option>
+            <option value="">All Relevant Employees</option>
             {[...employees].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
               <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
             ))}
@@ -144,6 +177,17 @@ export default function SalesTargets() {
           } else if (sortByEmployee === 'desc') {
             displayedTargets = [...displayedTargets].sort((a,b) => (b.employee?.firstName || '').localeCompare(a.employee?.firstName || ''));
           }
+          
+          if (displayedTargets.length === 0) {
+            return (
+              <div className="col-span-full py-16 text-center text-gray-400">
+                <Target size={48} className="mx-auto text-gray-200 mb-4" />
+                <h3 className="text-lg font-semibold text-gray-500">No targets assigned yet</h3>
+                <p className="mt-1">When a target is allocated to you, it will appear here.</p>
+              </div>
+            );
+          }
+          
           return displayedTargets.map(t => {
           const pct = Math.min(100, ((t.revenueAchieved / t.revenueTarget) * 100));
           const isWinner = pct >= 100;
@@ -153,7 +197,7 @@ export default function SalesTargets() {
             <div key={t.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
               {isWinner && <div className="absolute top-0 right-0 p-2 bg-yellow-100 text-yellow-600 rounded-bl-xl"><Trophy size={20} /></div>}
               {t.isRecurring && <div className="absolute bottom-0 right-0 p-1.5 bg-blue-50 text-blue-500 text-[10px] font-bold px-3 rounded-tl-xl border-t border-l border-blue-100 uppercase tracking-tighter">Recurring</div>}
-              {user?.role === 'ADMIN' && (
+              {(user?.role === 'ADMIN' || t.createdById === user?.id) && (
                 <button onClick={() => handleEdit(t)} className="absolute top-2 right-12 p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors z-10" title="Edit Target">
                   <Edit2 size={16} />
                 </button>
@@ -163,10 +207,18 @@ export default function SalesTargets() {
                 <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-lg">
                   {employee.firstName[0]}
                 </div>
-                <div>
+                <div className="flex-1">
                   <h3 className="font-bold text-gray-900">{employee.firstName} {employee.lastName}</h3>
                   <p className="text-sm text-gray-500 font-medium">{getLabel(t)} Target</p>
+                  {t.parentTarget && (
+                    <p className="text-xs text-indigo-500 mt-0.5">Allocated by: {t.parentTarget.employee?.firstName} {t.parentTarget.employee?.lastName}</p>
+                  )}
                 </div>
+                {(user?.role === 'ADMIN' || t.employeeId === user?.id) && employees.length > 0 && !t.parentTargetId && (
+                  <button onClick={() => openAllocateModal(t)} className="px-3 py-1.5 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-md font-semibold transition-colors border border-indigo-100">
+                    Allocate
+                  </button>
+                )}
               </div>
 
               <div className="mb-4">
@@ -196,6 +248,24 @@ export default function SalesTargets() {
                   <span className="font-bold">{t.quotationsSent} <span className="text-gray-400 font-normal text-xs">/ {t.quotationsTarget}</span></span>
                 </div>
               </div>
+
+              {t.subTargets && t.subTargets.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-gray-100">
+                  <p className="text-xs font-semibold text-gray-500 mb-2">Allocations</p>
+                  <div className="space-y-1.5">
+                    {t.subTargets.map(sub => (
+                      <div key={sub.id} className="flex justify-between text-xs items-center bg-gray-50 px-2 py-1.5 rounded">
+                        <span>{sub.employee?.firstName} {sub.employee?.lastName}</span>
+                        <span className="font-mono font-medium">₹{Number(sub.revenueTarget).toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between text-xs items-center px-2 py-1 mt-1 text-gray-400 border-t border-gray-100">
+                      <span>Unallocated Amount</span>
+                      <span className="font-mono">₹{(Number(t.revenueTarget) - t.subTargets.reduce((sum, sub) => sum + Number(sub.revenueTarget), 0)).toLocaleString('en-IN')}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           );
         }); })()}
@@ -265,6 +335,59 @@ export default function SalesTargets() {
 
               <button disabled={isLoading} type="submit" className="w-full py-2 bg-green-600 text-white font-semibold rounded-lg mt-4 disabled:opacity-50">
                 {isEditing ? 'Update Target' : 'Save Target'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {allocateModal.show && allocateModal.parentTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
+              <h2 className="font-bold text-lg">Allocate Target</h2>
+              <button onClick={() => setAllocateModal({ show: false, parentTarget: null })} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            
+            <div className="px-6 py-3 bg-blue-50 border-b border-blue-100">
+              <p className="text-xs text-blue-600 font-medium mb-1">Your Total Target: ₹{Number(allocateModal.parentTarget.revenueTarget).toLocaleString('en-IN')}</p>
+              <p className="text-sm font-bold text-blue-800">
+                Unallocated Amount: ₹{
+                  (Number(allocateModal.parentTarget.revenueTarget) - 
+                  (allocateModal.parentTarget.subTargets?.reduce((sum, sub) => sum + Number(sub.revenueTarget), 0) || 0)).toLocaleString('en-IN')
+                }
+              </p>
+            </div>
+
+            <form onSubmit={handleAllocateSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="text-xs font-semibold block mb-1">Subordinate</label>
+                <select required value={allocateData.employeeId} onChange={e=>setAllocateData({...allocateData,employeeId:e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm">
+                  <option value="">Select Subordinate</option>
+                  {employees.filter(emp => emp.id !== allocateModal.parentTarget.employeeId).map(emp => (
+                    <option key={emp.id} value={emp.id}>{emp.firstName} {emp.lastName}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold block mb-1">Revenue Target (₹)</label>
+                <input type="number" required max={Number(allocateModal.parentTarget.revenueTarget) - (allocateModal.parentTarget.subTargets?.reduce((sum, sub) => sum + Number(sub.revenueTarget), 0) || 0)} value={allocateData.revenueTarget} onChange={e=>setAllocateData({...allocateData,revenueTarget:e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Amount to allocate" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold block mb-1">Leads Goal</label>
+                  <input type="number" required value={allocateData.leadsTarget} onChange={e=>setAllocateData({...allocateData,leadsTarget:e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold block mb-1">Quotes Goal</label>
+                  <input type="number" required value={allocateData.quotationsTarget} onChange={e=>setAllocateData({...allocateData,quotationsTarget:e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" />
+                </div>
+              </div>
+
+              <button disabled={isLoading} type="submit" className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg mt-4 disabled:opacity-50">
+                Confirm Allocation
               </button>
             </form>
           </div>

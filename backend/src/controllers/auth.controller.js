@@ -96,7 +96,7 @@ exports.me = async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      select: { id: true, email: true, firstName: true, lastName: true, phone: true, role: true, status: true, avatar: true, lastLoginAt: true, createdAt: true, permissions: true, managerId: true, delegatedManagerId: true, isSuperAdmin: true }
+      select: { id: true, email: true, firstName: true, lastName: true, phone: true, role: true, status: true, avatar: true, lastLoginAt: true, createdAt: true, permissions: true, managerId: true, delegatedManagerId: true, isSuperAdmin: true, canAssignLeads: true, canAssignTasks: true, canViewSubordinates: true }
     });
 
     res.json({ success: true, data: user });

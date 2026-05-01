@@ -11,11 +11,15 @@ router.get('/', userController.getUsers);
 // Fetch only valid subordinates for the current user (used in dropdowns)
 router.get('/subordinates/list', userController.getSubordinateUsers);
 
+// Admin: count employees with no manager assigned
+router.get('/unassigned-count', authorize('ADMIN'), userController.getUnassignedCount);
+
 // Only admins can create new employees directly
 router.post('/', authorize('ADMIN'), userController.createUser);
 
 router.get('/:id', userController.getUserById);
 router.put('/:id', userController.updateUser);
+router.post('/:id/transfer-subordinates', authorize('ADMIN'), userController.transferSubordinates);
 router.get('/:id/audit', userController.getPermissionAuditLogs);
 
 module.exports = router;

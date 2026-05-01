@@ -42,11 +42,19 @@ model User {
   manager             User?    @relation("UserToManager", fields: [managerId], references: [id])
   subordinates        User[]   @relation("UserToManager")
 
+  // Materialized path for O(1) subtree queries (e.g. '/adminId/managerId/employeeId/')
+  hierarchyPath       String?  @db.Text
+
   // Super Admin protection — this account cannot be deleted or deactivated
   isSuperAdmin        Boolean     @default(false)
 
-  // Permissions (Module visibility + Elevated abilities)
+  // Permissions (Module visibility + Elevated abilities — full JSON blob)
   permissions         Json?
+
+  // Extracted native columns for fast, indexable permission checks
+  canAssignLeads      Boolean  @default(false)
+  canAssignTasks      Boolean  @default(false)
+  canViewSubordinates Boolean  @default(false)
 
   // Delegated Authority (Temporary Access)
   delegatedManagerId  String?
@@ -170,6 +178,9 @@ model Lead {
   assignedToId    String?
   assignedTo      User?       @relation("LeadAssignee", fields: [assignedToId], references: [id])
 
+  // Time-travel snapshot: captures manager at time of lead closure
+  snapshotManagerId String?
+
   products        LeadProduct[]
   followUps       FollowUp[]
   notes           Note[]
@@ -179,9 +190,15 @@ model Lead {
   timeline        LeadTimeline[]
   bulkMessageLogs BulkMessageLog[]
 
+  // Soft delete
+  isArchived      Boolean     @default(false)
+  deletedAt       DateTime?
+
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
+  @@index([assignedToId, status, source])
+  @@index([isArchived, assignedToId])
   @@map("leads")
 }
 
@@ -238,6 +255,7 @@ model FollowUp {
   completedAt     DateTime?
   status          FollowUpStatus  @default(SCHEDULED)
   outcome         String?         @db.Text
+  reminderSent    Boolean         @default(false)
 
   leadId          String
   lead            Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
@@ -779,11 +797,20 @@ model Task {
   assignedToId    String
   assignedTo      User         @relation("TaskAssignee", fields: [assignedToId], references: [id])
 
+  // Time-travel snapshot: captures manager at time of task completion
+  snapshotManagerId String?
+
   checklist       TaskChecklistItem[]
+
+  // Soft delete
+  isArchived      Boolean      @default(false)
+  deletedAt       DateTime?
 
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
+  @@index([assignedToId, status, type])
+  @@index([isArchived, assignedToId])
   @@map("tasks")
 }
 
@@ -859,6 +886,12 @@ model SalesTarget {
   reminderSent    Boolean          @default(false)
 
   notes           String?          @db.Text
+
+  // Roll-up: if set, this target is a sub-allocation under a manager's parent target
+  parentTargetId  String?
+  parentTarget    SalesTarget?     @relation("TargetRollup", fields: [parentTargetId], references: [id])
+  subTargets      SalesTarget[]    @relation("TargetRollup")
+
   createdById     String
   createdBy       User             @relation("TargetCreator", fields: [createdById], references: [id])
 

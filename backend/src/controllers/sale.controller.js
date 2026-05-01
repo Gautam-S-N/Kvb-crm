@@ -710,6 +710,12 @@ exports.createSale = async (req, res) => {
       return newSale;
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'SALES' });
+      ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.status(201).json({ success: true, data: sale });
   } catch (error) {
     // Surface transaction-level validation errors as 409
@@ -747,6 +753,12 @@ exports.updateSale = async (req, res) => {
         payments: true
       }
     });
+
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'SALES' });
+      ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
 
     res.json({ success: true, data: updated });
   } catch (error) {
@@ -860,6 +872,11 @@ exports.recordPayment = async (req, res) => {
         entityId: id
       }
     });
+
+    if (io) {
+      io.emit('REFRESH_DATA', { module: 'SALES' });
+      io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
 
     res.status(201).json({
       success: true,

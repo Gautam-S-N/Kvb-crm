@@ -5,8 +5,15 @@ exports.getTargets = async (req, res) => {
   try {
     const { employeeId, periodType, periodYear, periodNumber } = req.query;
     const where = {};
-    if (req.user.role === 'EMPLOYEE') where.employeeId = req.user.id;
-    else if (employeeId) where.employeeId = employeeId;
+    if (req.user.role === 'EMPLOYEE') {
+      where.OR = [
+        { employeeId: req.user.id },
+        { createdById: req.user.id }
+      ];
+    } else if (employeeId) {
+      where.employeeId = employeeId;
+    }
+    
     if (periodType)   where.periodType   = periodType;
     if (periodYear)   where.periodYear   = parseInt(periodYear);
     if (periodNumber) where.periodNumber = parseInt(periodNumber);
@@ -15,7 +22,9 @@ exports.getTargets = async (req, res) => {
       where,
       include: {
         employee: { select: { id: true, firstName: true, lastName: true } },
-        createdBy: { select: { id: true, firstName: true, lastName: true } }
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+        subTargets: { select: { id: true, employeeId: true, revenueTarget: true, leadsTarget: true, quotationsTarget: true, employee: { select: { firstName: true, lastName: true } } } },
+        parentTarget: { include: { employee: { select: { firstName: true, lastName: true } } } }
       },
       orderBy: [{ periodYear: 'desc' }, { periodNumber: 'desc' }]
     });
@@ -38,7 +47,8 @@ exports.createTarget = async (req, res) => {
       quotationsTarget, 
       notes, 
       isRecurring, 
-      reminderAt 
+      reminderAt,
+      parentTargetId
     } = req.body;
 
     const target = await prisma.salesTarget.create({
@@ -53,13 +63,20 @@ exports.createTarget = async (req, res) => {
         quotationsTarget: parseInt(quotationsTarget) || 0,
         notes,
         isRecurring:   !!isRecurring,
-        reminderAt:    reminderAt ? new Date(reminderAt) : null
+        reminderAt:    reminderAt ? new Date(reminderAt) : null,
+        parentTargetId: parentTargetId || null
       },
       include: {
         employee: { select: { id: true, firstName: true, lastName: true } },
         createdBy: { select: { id: true, firstName: true, lastName: true } }
       }
     });
+    
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TARGETS' });
+    }
+
     res.status(201).json({ success: true, data: target });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -69,10 +86,43 @@ exports.createTarget = async (req, res) => {
 // PUT /api/targets/:id  (admin only)
 exports.updateTarget = async (req, res) => {
   try {
+    const {
+      employeeId,
+      periodType,
+      periodYear,
+      periodNumber,
+      revenueTarget,
+      leadsTarget,
+      quotationsTarget,
+      notes,
+      isRecurring,
+      reminderAt,
+      parentTargetId
+    } = req.body;
+
+    const dataToUpdate = {};
+    if (employeeId !== undefined) dataToUpdate.employeeId = employeeId;
+    if (periodType !== undefined) dataToUpdate.periodType = periodType;
+    if (periodYear !== undefined) dataToUpdate.periodYear = parseInt(periodYear);
+    if (periodNumber !== undefined) dataToUpdate.periodNumber = parseInt(periodNumber) || 1;
+    if (revenueTarget !== undefined) dataToUpdate.revenueTarget = parseFloat(revenueTarget);
+    if (leadsTarget !== undefined) dataToUpdate.leadsTarget = parseInt(leadsTarget) || 0;
+    if (quotationsTarget !== undefined) dataToUpdate.quotationsTarget = parseInt(quotationsTarget) || 0;
+    if (notes !== undefined) dataToUpdate.notes = notes;
+    if (isRecurring !== undefined) dataToUpdate.isRecurring = !!isRecurring;
+    if (reminderAt !== undefined) dataToUpdate.reminderAt = reminderAt ? new Date(reminderAt) : null;
+    if (parentTargetId !== undefined) dataToUpdate.parentTargetId = parentTargetId || null;
+
     const target = await prisma.salesTarget.update({
       where: { id: req.params.id },
-      data: req.body
+      data: dataToUpdate
     });
+
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TARGETS' });
+    }
+
     res.json({ success: true, data: target });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -83,6 +133,12 @@ exports.updateTarget = async (req, res) => {
 exports.deleteTarget = async (req, res) => {
   try {
     await prisma.salesTarget.delete({ where: { id: req.params.id } });
+
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TARGETS' });
+    }
+
     res.json({ success: true, message: 'Target deleted' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -147,7 +203,7 @@ exports.refreshAttainment = async (req, res) => {
     const updates = await Promise.all(targets.map(async (t) => {
       const { start, end } = getPeriodDates(t.periodType, t.periodYear, t.periodNumber);
 
-      const [salesAgg, wonLeads, quotationsSent] = await Promise.all([
+      const [salesAgg, wonLeads, quotationsSent, subTargetsAgg] = await Promise.all([
         prisma.sale.aggregate({
           where: { createdById: t.employeeId, createdAt: { gte: start, lt: end } },
           _sum: { totalAmount: true }
@@ -157,17 +213,27 @@ exports.refreshAttainment = async (req, res) => {
         }),
         prisma.quotation.count({
           where: { createdById: t.employeeId, createdAt: { gte: start, lt: end } }
+        }),
+        // Roll-up: also add achievements from any sub-targets allocated to subordinates
+        prisma.salesTarget.aggregate({
+          where: { parentTargetId: t.id },
+          _sum: { revenueAchieved: true, leadsAchieved: true, quotationsSent: true }
         })
       ]);
 
-      const revenueAchieved = parseFloat(salesAgg._sum.totalAmount || 0);
+      const directRevenue = parseFloat(salesAgg._sum.totalAmount || 0);
+      const subRevenue = parseFloat(subTargetsAgg._sum.revenueAchieved || 0);
+      const revenueAchieved = directRevenue + subRevenue;
+
+      const totalLeads = wonLeads + (subTargetsAgg._sum.leadsAchieved || 0);
+      const totalQuotes = quotationsSent + (subTargetsAgg._sum.quotationsSent || 0);
 
       const prevPct = (Number(t.revenueAchieved) / Number(t.revenueTarget)) * 100;
       const newPct  = (revenueAchieved / Number(t.revenueTarget)) * 100;
 
       const updated = await prisma.salesTarget.update({
         where: { id: t.id },
-        data: { revenueAchieved, leadsAchieved: wonLeads, quotationsSent }
+        data: { revenueAchieved, leadsAchieved: totalLeads, quotationsSent: totalQuotes }
       });
 
       // Emit notifications
@@ -196,6 +262,11 @@ exports.refreshAttainment = async (req, res) => {
       }
       return updated;
     }));
+
+    const ioRefresh = req.app?.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TARGETS' });
+    }
 
     res.json({ success: true, message: `Refreshed ${updates.length} target(s)`, data: updates });
   } catch (error) {

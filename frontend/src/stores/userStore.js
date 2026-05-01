@@ -38,7 +38,30 @@ export const useUserStore = create((set, get) => ({
       }));
       return { success: true, data: res.data.data };
     } catch (err) {
-      set({ error: err.response?.data?.message, isLoading: false });
+      set({ isLoading: false });
+      // Surface the full error payload so UI can detect MANAGER_HAS_SUBORDINATES (409)
+      return {
+        success: false,
+        error: err.response?.data?.message,
+        code: err.response?.data?.code,
+        subordinateCount: err.response?.data?.subordinateCount,
+        status: err.response?.status
+      };
+    }
+  },
+
+  transferSubordinates: async (managerId, newManagerId) => {
+    set({ isLoading: true });
+    try {
+      const res = await api.post(`/users/${managerId}/transfer-subordinates`, { newManagerId });
+      // Update the suspended manager in the local store
+      set(state => ({
+        users: state.users.map(u => u.id === managerId ? { ...u, ...res.data.data } : u),
+        isLoading: false
+      }));
+      return { success: true };
+    } catch (err) {
+      set({ isLoading: false });
       return { success: false, error: err.response?.data?.message };
     }
   },

@@ -57,7 +57,11 @@ const PermBadge = ({ label, color = 'blue' }) => {
 
 export default function UserManagement() {
   const { user } = useAuthStore();
-  const { users, isLoading, fetchUsers, createUser, updateUser, fetchPermissionAuditLogs } = useUserStore();
+  const { users, isLoading, fetchUsers, createUser, updateUser, transferSubordinates, fetchPermissionAuditLogs } = useUserStore();
+
+  // Handover modal state — shown when suspending a manager with active subordinates
+  const [handoverModal, setHandoverModal] = useState(null); // { user, subordinateCount }
+  const [handoverNewManagerId, setHandoverNewManagerId] = useState('');
 
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
@@ -141,8 +145,24 @@ export default function UserManagement() {
 
   const toggleStatus = async (u) => {
     const nextStatus = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    if (confirm(`Are you sure you want to ${nextStatus.toLowerCase()} ${u.firstName}?`)) {
-      await updateUser(u.id, { status: nextStatus });
+    if (!confirm(`Are you sure you want to ${nextStatus.toLowerCase()} ${u.firstName}?`)) return;
+
+    const result = await updateUser(u.id, { status: nextStatus });
+
+    // If backend says this manager has active subordinates, show the handover modal
+    if (!result.success && result.code === 'MANAGER_HAS_SUBORDINATES') {
+      setHandoverModal({ user: u, subordinateCount: result.subordinateCount });
+      setHandoverNewManagerId('');
+    }
+  };
+
+  const handleHandoverConfirm = async () => {
+    if (!handoverModal) return;
+    const result = await transferSubordinates(handoverModal.user.id, handoverNewManagerId || null);
+    if (result.success) {
+      setHandoverModal(null);
+    } else {
+      alert(result.error || 'Transfer failed. Please try again.');
     }
   };
 
@@ -538,6 +558,71 @@ export default function UserManagement() {
                 )}
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Manager Suspension Handover Modal ──────────────────────────────── */}
+      {handoverModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
+                  <GitBranch size={20} className="text-amber-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Manager Handover Required</h2>
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    <strong>{handoverModal.user.firstName} {handoverModal.user.lastName}</strong> currently manages{' '}
+                    <strong>{handoverModal.subordinateCount}</strong> active employee(s). Please reassign them before suspending.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+                  Assign subordinates to
+                </label>
+                <select
+                  value={handoverNewManagerId}
+                  onChange={e => setHandoverNewManagerId(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                >
+                  <option value="">— Unassigned Pool (no new manager) —</option>
+                  {users
+                    .filter(u => u.status === 'ACTIVE' && u.id !== handoverModal.user.id)
+                    .sort((a, b) => a.firstName.localeCompare(b.firstName))
+                    .map(u => (
+                      <option key={u.id} value={u.id}>{u.firstName} {u.lastName} ({u.role})</option>
+                    ))
+                  }
+                </select>
+                {!handoverNewManagerId && (
+                  <p className="text-xs text-amber-600 mt-1.5">
+                    ⚠️ Leaving this blank will move all subordinates to the Unassigned Pool — they will be visible only to Admins.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setHandoverModal(null)}
+                  className="flex-1 py-2.5 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleHandoverConfirm}
+                  disabled={isLoading}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {isLoading ? 'Transferring...' : 'Confirm & Suspend'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -399,6 +399,11 @@ exports.createPurchaseOrder = async (req, res) => {
       }
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'PURCHASE' });
+    }
+
     res.status(201).json({ success: true, data: po });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -491,6 +496,14 @@ exports.updatePurchaseOrder = async (req, res) => {
             data: { balance: { increment: item.quantity } }
           });
         }
+      }
+    }
+
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'PURCHASE' });
+      if (status === 'RECEIVED' && existingPO.status !== 'RECEIVED') {
+        ioRefresh.emit('REFRESH_DATA', { module: 'MATERIALS' });
       }
     }
 

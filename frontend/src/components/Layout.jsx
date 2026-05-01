@@ -231,7 +231,7 @@ const Layout = ({ children }) => {
       {/* Global Real-Time Toast Notification Pop-up */}
       {activeToast && (
         <div 
-          className="fixed bottom-6 right-6 z-50 animate-slide-up flex flex-col gap-2 cursor-pointer shadow-2xl rounded-2xl bg-gray-900 text-white p-4 max-w-sm border border-gray-700/50"
+          className="fixed bottom-8 right-8 z-[99999] flex flex-col gap-2 cursor-pointer shadow-2xl rounded-2xl bg-gray-900 text-white p-4 w-80 border border-gray-700 transition-all duration-300 transform translate-y-0 opacity-100"
           onClick={() => {
             if (activeToast.link) navigate(activeToast.link);
             clearToast();

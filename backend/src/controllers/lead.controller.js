@@ -7,7 +7,7 @@ exports.getLeads = async (req, res) => {
   try {
     const { status, source, assignedTo, search, page = 1, limit = 20 } = req.query;
     
-    const where = {};
+    const where = { isArchived: false };
     
     // Role-based filtering
     if (req.user.role === 'EMPLOYEE') {
@@ -97,7 +97,7 @@ exports.getLeadById = async (req, res) => {
     const { id } = req.params;
     
     const lead = await prisma.lead.findUnique({
-      where: { id },
+      where: { id, isArchived: false },
       include: {
         customer: true,
         assignedTo: {
@@ -369,6 +369,11 @@ exports.createLead = async (req, res) => {
       });
     }
     
+    if (io) {
+      io.emit('REFRESH_DATA', { module: 'LEADS' });
+      io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.status(201).json({
       success: true,
       message: isDuplicate ? 'Lead created for existing customer' : 'Lead created successfully',
@@ -386,7 +391,7 @@ exports.updateLead = async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
     
-    const lead = await prisma.lead.findUnique({ where: { id } });
+    const lead = await prisma.lead.findUnique({ where: { id, isArchived: false } });
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
@@ -396,16 +401,29 @@ exports.updateLead = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
-    // Track status change for timeline
+    // Track status change for timeline and snapshots
     const oldStatus = lead.status;
     const newStatus = updateData.status;
     
+    // Time-travel snapshot: capture manager at the moment of lead closure
+    const closingStatuses = ['WON', 'LOST'];
+    const isClosing = newStatus && closingStatuses.includes(newStatus) && !closingStatuses.includes(oldStatus);
+    let snapshotManagerId;
+    if (isClosing && lead.assignedToId) {
+      const assignee = await prisma.user.findUnique({
+        where: { id: lead.assignedToId },
+        select: { managerId: true }
+      });
+      snapshotManagerId = assignee?.managerId || null;
+    }
+
     const updated = await prisma.lead.update({
       where: { id },
       data: {
         ...updateData,
         estimateAmount: updateData.estimateAmount ? parseFloat(updateData.estimateAmount) : undefined,
-        closeDate: updateData.closeDate ? new Date(updateData.closeDate) : undefined
+        closeDate: updateData.closeDate ? new Date(updateData.closeDate) : undefined,
+        ...(isClosing && { snapshotManagerId })
       },
       include: {
         customer: true,
@@ -443,20 +461,32 @@ exports.updateLead = async (req, res) => {
       });
     }
     
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'LEADS' });
+      ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// Delete lead (Admin only)
+// Archive lead — soft delete (Admin only)
 exports.deleteLead = async (req, res) => {
   try {
     const { id } = req.params;
-    
-    await prisma.lead.delete({ where: { id } });
-    
-    res.json({ success: true, message: 'Lead deleted' });
+
+    const lead = await prisma.lead.findUnique({ where: { id } });
+    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+    await prisma.lead.update({
+      where: { id },
+      data: { isArchived: true, deletedAt: new Date() }
+    });
+
+    res.json({ success: true, message: 'Lead archived successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -535,6 +565,11 @@ exports.assignLead = async (req, res) => {
       });
     }
     
+    if (io) {
+      io.emit('REFRESH_DATA', { module: 'LEADS' });
+      io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

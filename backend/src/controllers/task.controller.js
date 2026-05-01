@@ -9,7 +9,7 @@ exports.getTasks = async (req, res) => {
     const { status, priority, assignedToId, type, search, page = 1, limit = 20 } = req.query;
     const userId = req.user.id;
 
-    let where = {};
+    let where = { isArchived: false };
 
     if (req.user.role === 'EMPLOYEE') {
       // Employees see TEAM tasks assigned to them or their cascading subordinates
@@ -98,7 +98,7 @@ exports.getTaskById = async (req, res) => {
         checklist: { orderBy: { id: 'asc' } }
       }
     });
-    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+    if (!task || task.isArchived) return res.status(404).json({ success: false, message: 'Task not found' });
     res.json({ success: true, data: task });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -168,6 +168,13 @@ exports.createTask = async (req, res) => {
       });
     }
 
+    // Force real-time UI refresh for both sides
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'TASKS' });
+      ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.status(201).json({ success: true, data: task });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -196,6 +203,12 @@ exports.updateTask = async (req, res) => {
       }
     });
 
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('REFRESH_DATA', { module: 'TASKS' });
+      io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -211,6 +224,12 @@ exports.completeTask = async (req, res) => {
     const task = await prisma.task.findUnique({ where: { id } });
     if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
 
+    // Snapshot the assignee's current managerId for time-travel analytics
+    const assignee = await prisma.user.findUnique({
+      where: { id: task.assignedToId },
+      select: { managerId: true }
+    });
+
     const updated = await prisma.task.update({
       where: { id },
       data: {
@@ -218,7 +237,8 @@ exports.completeTask = async (req, res) => {
         completedAt: new Date(),
         completionVoiceUrl: completionVoiceUrl || null,
         completionVoiceNote: completionVoiceNote || null,
-        attachmentUrl: attachmentUrl || null
+        attachmentUrl: attachmentUrl || null,
+        snapshotManagerId: assignee?.managerId || null
       }
     });
 
@@ -248,6 +268,11 @@ exports.completeTask = async (req, res) => {
           entityId: id
         }
       });
+    }
+
+    if (io) {
+      io.emit('REFRESH_DATA', { module: 'TASKS' });
+      io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
     res.json({ success: true, data: updated });
@@ -301,6 +326,11 @@ exports.failTask = async (req, res) => {
       });
     }
 
+    if (io) {
+      io.emit('REFRESH_DATA', { module: 'TASKS' });
+      io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -327,11 +357,17 @@ exports.toggleChecklistItem = async (req, res) => {
   }
 };
 
-// DELETE /api/tasks/:id
+// Archive task — soft delete
 exports.deleteTask = async (req, res) => {
   try {
-    await prisma.task.delete({ where: { id: req.params.id } });
-    res.json({ success: true, message: 'Task deleted' });
+    const task = await prisma.task.findUnique({ where: { id: req.params.id } });
+    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+    await prisma.task.update({
+      where: { id: req.params.id },
+      data: { isArchived: true, deletedAt: new Date() }
+    });
+    res.json({ success: true, message: 'Task archived successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -352,16 +388,16 @@ exports.getTaskStats = async (req, res) => {
 
     const employees = await prisma.user.findMany({
       where: { id: { in: targetIds }, status: 'ACTIVE' },
-      select: { id: true, firstName: true, lastName: true }
+      select: { id: true, firstName: true, lastName: true, managerId: true }
     });
 
     const stats = await Promise.all(employees.map(async (emp) => {
       const [total, completed, overdue, pending, inProgress] = await Promise.all([
-        prisma.task.count({ where: { assignedToId: emp.id, type: 'TEAM' } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'COMPLETED', type: 'TEAM' } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'OVERDUE', type: 'TEAM' } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'PENDING', type: 'TEAM' } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS', type: 'TEAM' } })
+        prisma.task.count({ where: { assignedToId: emp.id, type: 'TEAM', isArchived: false } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'COMPLETED', type: 'TEAM', isArchived: false } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'OVERDUE', type: 'TEAM', isArchived: false } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'PENDING', type: 'TEAM', isArchived: false } }),
+        prisma.task.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS', type: 'TEAM', isArchived: false } })
       ]);
 
       const score = total > 0 ? ((completed / total) * 100).toFixed(1) : '0.0';

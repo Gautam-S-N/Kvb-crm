@@ -273,6 +273,12 @@ exports.createQuotation = async (req, res) => {
       }
     });
 
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'QUOTATIONS' });
+      ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
     res.status(201).json({ success: true, data: quotation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
