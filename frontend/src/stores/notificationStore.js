@@ -101,6 +101,34 @@ export const useNotificationStore = create((set, get) => ({
       }, 5500);
     });
 
+    // ── permission_updated event — refresh user session silently ──────────
+    socket.on('permission_updated', async (data) => {
+      try {
+        // Dynamically import authStore to avoid circular dep issues
+        const { useAuthStore } = await import('./authStore');
+        await useAuthStore.getState().checkAuth();
+      } catch (e) {
+        console.warn('Failed to refresh permissions:', e);
+      }
+
+      // Show a prominent toast-style notification
+      const notif = {
+        id: Date.now(),
+        title: '🔐 Permissions Updated',
+        body: data.body || 'Your access permissions have been updated. Changes are now active.',
+        link: '/',
+        isRead: false,
+        createdAt: new Date().toISOString(),
+      };
+
+      get().addNotification(notif);
+      set({ activeToast: notif });
+      setTimeout(() => {
+        if (get().activeToast?.id === notif.id) set({ activeToast: null });
+      }, 8000);
+    });
+    // ──────────────────────────────────────────────────────────────────────
+
     set({ socket });
   },
 

@@ -4,7 +4,7 @@ import { useUserStore } from '../stores/userStore';
 import { useAuthStore } from '../stores/authStore';
 import {
   Users, ShieldAlert, Edit, Ban, CheckCircle, Plus, X, Shield,
-  GitBranch, ChevronDown, ChevronUp, Clock, History
+  GitBranch, Clock, History, Crown
 } from 'lucide-react';
 
 // All toggleable modules (Dashboard always ON, Settings/UserMgmt admin-only)
@@ -65,6 +65,7 @@ export default function UserManagement() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [showAudit, setShowAudit] = useState(null);
   const [filterModule, setFilterModule] = useState('');
+  const [lastSavedPerms, setLastSavedPerms] = useState(null); // confirmed live permissions after save
 
   const [form, setForm] = useState({
     firstName: '', lastName: '', email: '', phone: '', password: '', role: 'EMPLOYEE'
@@ -90,6 +91,7 @@ export default function UserManagement() {
 
   const handleOpenModal = (u = null) => {
     setModalTab('basic');
+    setLastSavedPerms(null);
     if (u) {
       setEditingUser(u);
       setForm({ firstName: u.firstName, lastName: u.lastName, email: u.email, phone: u.phone || '', role: u.role, password: '' });
@@ -120,12 +122,21 @@ export default function UserManagement() {
     };
     if (!payload.password) delete payload.password;
 
+    let result;
     if (editingUser) {
-      await updateUser(editingUser.id, payload);
+      result = await updateUser(editingUser.id, payload);
     } else {
-      await createUser(payload);
+      result = await createUser(payload);
     }
-    setShowModal(false);
+
+    // After save: store confirmed permissions so admin can verify what is now live
+    if (result?.success && payload.permissions) {
+      setLastSavedPerms(payload.permissions);
+      // Stay on modal so admin can review; switch to elevated tab if permissions were set
+      setModalTab('elevated');
+    } else {
+      setShowModal(false);
+    }
   };
 
   const toggleStatus = async (u) => {
@@ -221,11 +232,18 @@ export default function UserManagement() {
                 <tr key={u.id} className="hover:bg-gray-50">
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-sm ${u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
-                        {u.firstName[0]}
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-sm ${u.isSuperAdmin ? 'bg-yellow-100 text-yellow-700' : u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
+                        {u.isSuperAdmin ? <Crown size={16} /> : u.firstName[0]}
                       </div>
                       <div>
-                        <div className="font-bold text-gray-900">{u.firstName} {u.lastName}</div>
+                        <div className="font-bold text-gray-900 flex items-center gap-1.5">
+                          {u.firstName} {u.lastName}
+                          {u.isSuperAdmin && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 text-[9px] font-bold rounded border border-yellow-200">
+                              <Crown size={9} /> SUPER ADMIN
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-gray-500">{u.email}</div>
                         <span className={`mt-0.5 inline-block px-1.5 py-0.5 text-[9px] uppercase font-bold rounded ${u.role === 'ADMIN' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600'}`}>{u.role}</span>
                       </div>
@@ -261,16 +279,28 @@ export default function UserManagement() {
                   </td>
                   <td className="px-5 py-4 text-center">
                     <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => handleOpenModal(u)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded" title="Edit Permissions">
-                        <Edit size={15} />
-                      </button>
-                      <button onClick={() => handleShowAudit(u.id)} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded" title="Audit Log">
-                        <History size={15} />
-                      </button>
-                      {u.id !== user.id && (
-                        <button onClick={() => toggleStatus(u)} className={`p-1.5 rounded ${u.status === 'ACTIVE' ? 'text-gray-400 hover:text-red-600' : 'text-red-400 hover:text-green-600'}`} title={u.status === 'ACTIVE' ? 'Suspend' : 'Restore'}>
-                          {u.status === 'ACTIVE' ? <Ban size={15}/> : <CheckCircle size={15}/>}
-                        </button>
+                      {u.isSuperAdmin ? (
+                        // Super Admin: show audit log only — no edit or suspend
+                        <>
+                          <span className="text-[10px] text-yellow-600 font-semibold flex items-center gap-1 mr-1"><Crown size={11}/> Protected</span>
+                          <button onClick={() => handleShowAudit(u.id)} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded" title="Audit Log">
+                            <History size={15} />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => handleOpenModal(u)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded" title="Edit Permissions">
+                            <Edit size={15} />
+                          </button>
+                          <button onClick={() => handleShowAudit(u.id)} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded" title="Audit Log">
+                            <History size={15} />
+                          </button>
+                          {u.id !== user.id && (
+                            <button onClick={() => toggleStatus(u)} className={`p-1.5 rounded ${u.status === 'ACTIVE' ? 'text-gray-400 hover:text-red-600' : 'text-red-400 hover:text-green-600'}`} title={u.status === 'ACTIVE' ? 'Suspend' : 'Restore'}>
+                              {u.status === 'ACTIVE' ? <Ban size={15}/> : <CheckCircle size={15}/>}
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </td>
@@ -474,10 +504,38 @@ export default function UserManagement() {
                 )}
               </div>
 
-              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex-shrink-0">
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 flex-shrink-0 space-y-3">
+                {/* Live confirmation: what was just saved */}
+                {lastSavedPerms && (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-xs text-green-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-bold text-green-700 flex items-center gap-1">✅ Permissions saved & now live</span>
+                      <button type="button" onClick={() => { setLastSavedPerms(null); setShowModal(false); }} className="text-green-500 hover:text-green-700">
+                        <X size={13} />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {Object.entries(lastSavedPerms.modules || {}).filter(([,v]) => v).map(([k]) => (
+                        <span key={k} className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded font-semibold text-[10px]">{k.replace('_',' ')}</span>
+                      ))}
+                      {lastSavedPerms.canAssignLeads && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold text-[10px]">Assign Leads ✓</span>}
+                      {lastSavedPerms.canAssignTasks && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold text-[10px]">Assign Tasks ✓</span>}
+                      {lastSavedPerms.canViewSubordinates && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-semibold text-[10px]">Team View ✓</span>}
+                      {Object.entries(lastSavedPerms.modules || {}).filter(([,v]) => v).length === 0 && !lastSavedPerms.canAssignLeads && !lastSavedPerms.canAssignTasks && !lastSavedPerms.canViewSubordinates && (
+                        <span className="text-gray-500 italic">No permissions granted</span>
+                      )}
+                    </div>
+                    <p className="mt-2 text-[10px] text-green-600">The employee's session has been notified. Their interface will reflect these changes immediately.</p>
+                  </div>
+                )}
                 <button disabled={isLoading} type="submit" className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg disabled:opacity-50 transition-colors">
                   {isLoading ? 'Saving...' : `Save ${editingUser ? 'Changes' : 'Employee'}`}
                 </button>
+                {lastSavedPerms && (
+                  <button type="button" onClick={() => { setLastSavedPerms(null); setShowModal(false); }} className="w-full py-2 border border-gray-200 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-100 transition-colors">
+                    Done — Close
+                  </button>
+                )}
               </div>
             </form>
           </div>

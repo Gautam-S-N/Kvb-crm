@@ -3,6 +3,8 @@ const router = express.Router();
 const leadController = require('../controllers/lead.controller');
 const { authMiddleware, authorize } = require('../middleware/auth.middleware');
 
+const { requireElevated } = require('../middleware/permission.middleware');
+
 // All routes require authentication
 router.use(authMiddleware);
 
@@ -16,7 +18,7 @@ router.put('/:id', leadController.updateLead);
 router.delete('/:id', authorize('ADMIN'), leadController.deleteLead);
 
 // Lead assignment
-router.post('/:id/assign', authorize('ADMIN'), leadController.assignLead);
+router.post('/:id/assign', requireElevated('canAssignLeads'), leadController.assignLead);
 
 // Lead Notes tracking
 router.post('/:id/notes', leadController.addNote);

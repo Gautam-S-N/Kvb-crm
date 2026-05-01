@@ -11,6 +11,8 @@ const LeadForm = ({ onClose, onSuccess }) => {
   const { users, fetchUsers } = useUserStore();
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'ADMIN';
+  const canAssign = isAdmin || user?.permissions?.canAssignLeads;
+  const [subordinates, setSubordinates] = useState([]);
 
   const [duplicateWarning, setDuplicateWarning] = useState(null);
   const [productSearch, setProductSearch] = useState('');
@@ -38,8 +40,13 @@ const LeadForm = ({ onClose, onSuccess }) => {
 
   useEffect(() => {
     fetchProducts();
-    if (isAdmin) fetchUsers();
-  }, [isAdmin]);
+    if (isAdmin) {
+      fetchUsers();
+    } else if (user?.permissions?.canAssignLeads) {
+      const { fetchSubordinates } = useUserStore.getState();
+      fetchSubordinates().then(setSubordinates);
+    }
+  }, [isAdmin, user?.permissions?.canAssignLeads]);
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -144,15 +151,26 @@ const LeadForm = ({ onClose, onSuccess }) => {
               <input type="number" name="estimateAmount" value={formData.estimateAmount} onChange={handleChange}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm" />
             </div>
-            {isAdmin && (
+            {canAssign && (
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1">Assigned To</label>
                 <select name="assignedToId" value={formData.assignedToId} onChange={handleChange}
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm">
-                  <option value="">Unassigned</option>
-                  {[...users].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
-                    <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-                  ))}
+                  {isAdmin ? (
+                    <>
+                      <option value="">Unassigned</option>
+                      {[...users].sort((a,b) => a.firstName.localeCompare(b.firstName)).map(u => (
+                        <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      <option value={user.id}>Me ({user.firstName})</option>
+                      {subordinates.map(u => (
+                        <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
             )}

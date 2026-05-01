@@ -7,10 +7,11 @@ import {
 } from 'recharts';
 import {
   Users, CheckCircle2, Clock, AlertTriangle, TrendingUp,
-  ChevronDown, ChevronUp, Loader2, ListChecks
+  ChevronDown, ChevronUp, Loader2, ListChecks, ShieldAlert
 } from 'lucide-react';
 import TaskDetailModal from '../components/TaskDetailModal';
 import { useTaskStore } from '../stores/taskStore';
+import { useAuthStore } from '../stores/authStore';
 
 // ── Color palette ────────────────────────────────────────────
 const COLORS = {
@@ -205,6 +206,7 @@ function ComparisonChart({ stats }) {
 
 // ── Main Page ────────────────────────────────────────────────
 export default function EmployeeTracking() {
+  const { user } = useAuthStore();
   const [stats, setStats]           = useState([]);
   const [isLoading, setIsLoading]   = useState(true);
   const [expanded, setExpanded]     = useState(null); // employee id
@@ -214,7 +216,12 @@ export default function EmployeeTracking() {
   
   const { fetchTasks } = useTaskStore();
 
+  // Permission gate: admin sees all, employee needs canViewSubordinates
+  const isAdmin = user?.role === 'ADMIN';
+  const hasTrackingAccess = isAdmin || user?.permissions?.canViewSubordinates === true;
+
   useEffect(() => {
+    if (!hasTrackingAccess) return; // Don't fetch if no access
     (async () => {
       setIsLoading(true);
       try {
@@ -223,7 +230,7 @@ export default function EmployeeTracking() {
       } catch { /* ignore */ }
       setIsLoading(false);
     })();
-  }, []);
+  }, [hasTrackingAccess]);
 
   const handleExpand = async (empId) => {
     if (expanded === empId) { setExpanded(null); setTasks([]); return; }
@@ -249,7 +256,15 @@ export default function EmployeeTracking() {
 
   return (
     <Layout>
-      <div className="max-w-6xl mx-auto">
+      {!hasTrackingAccess ? (
+        <div className="p-12 text-center text-gray-500">
+          <ShieldAlert size={48} className="mx-auto mb-4 opacity-50" />
+          <h2 className="text-xl font-bold">Access Denied</h2>
+          <p className="mt-1">You do not have permission to view Employee Tracking.</p>
+        </div>
+      ) : (
+        <>
+        <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -358,13 +373,14 @@ export default function EmployeeTracking() {
         <TaskDetailModal
           taskId={selectedTaskForDetail}
           onClose={() => setSelectedTaskForDetail(null)}
-          onUpdate={() => { 
-            // Re-fetch everything to ensure stats and task list are in sync
-            fetchTasks(); 
-            handleExpand(expanded); // Re-fetch the expanded list
-            setSelectedTaskForDetail(null); 
+          onUpdate={() => {
+            fetchTasks();
+            handleExpand(expanded);
+            setSelectedTaskForDetail(null);
           }}
         />
+      )}
+        </>
       )}
     </Layout>
   );

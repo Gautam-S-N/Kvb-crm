@@ -42,6 +42,9 @@ model User {
   manager             User?    @relation("UserToManager", fields: [managerId], references: [id])
   subordinates        User[]   @relation("UserToManager")
 
+  // Super Admin protection — this account cannot be deleted or deactivated
+  isSuperAdmin        Boolean     @default(false)
+
   // Permissions (Module visibility + Elevated abilities)
   permissions         Json?
 

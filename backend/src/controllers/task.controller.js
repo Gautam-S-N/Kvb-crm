@@ -31,6 +31,15 @@ exports.getTasks = async (req, res) => {
     if (priority) where.priority = priority;
     if (type)     where.type     = type;
     if (assignedToId) {
+      // Employees may only query tasks for users within their subordinate scope
+      if (req.user.role === 'EMPLOYEE') {
+        const validUserIds = await getSubordinateIds(req.user.id, true);
+        validUserIds.push(req.user.id);
+        if (!validUserIds.includes(assignedToId)) {
+          return res.status(403).json({ success: false, message: 'Access denied: Cannot view tasks for this user.' });
+        }
+      }
+
       // Narrow results to a specific assignee (used by EmployeeTracking expand)
       if (where.OR) {
         // If OR already exists from role check, wrap everything in an AND
@@ -41,7 +50,7 @@ exports.getTasks = async (req, res) => {
           ]
         };
         delete where.OR; // cleanup top-level OR
-        delete where.type; 
+        delete where.type;
       } else {
         where.assignedToId = assignedToId;
       }

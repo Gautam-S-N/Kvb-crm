@@ -307,7 +307,12 @@ const LeadDetail = () => {
   }, [id]);
 
   const handleStatusChange = async (newStatus) => updateLead(id, { status: newStatus });
-  const handleAssign = async (employeeId) => assignLead(id, employeeId);
+  const handleAssign = async (employeeId) => {
+    const res = await assignLead(id, employeeId);
+    if (res && !res.success) {
+      alert(res.error || 'Failed to assign lead');
+    }
+  };
 
   const handleTimelineSubmit = async (e) => {
     e.preventDefault();

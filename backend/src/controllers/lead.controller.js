@@ -249,6 +249,17 @@ exports.createLead = async (req, res) => {
       assignedToId
     } = req.body;
     
+    // Validate assignment permissions for employees
+    let finalAssignedToId = assignedToId || req.user.id;
+    if (req.user.role === 'EMPLOYEE' && finalAssignedToId !== req.user.id) {
+      const validUserIds = await getSubordinateIds(req.user.id, true);
+      validUserIds.push(req.user.id);
+      
+      if (!validUserIds.includes(finalAssignedToId)) {
+        return res.status(403).json({ success: false, message: 'You can only assign leads to yourself or your subordinates.' });
+      }
+    }
+
     // Check for duplicate customer
     const existingCustomer = await prisma.customer.findFirst({
       where: {
@@ -300,7 +311,7 @@ exports.createLead = async (req, res) => {
         customerId,
         createdById: req.user.id,
         // Employees always own their leads; admins can assign to others
-        assignedToId: req.user.role === 'EMPLOYEE' ? req.user.id : (assignedToId || req.user.id),
+        assignedToId: req.user.role === 'ADMIN' ? (assignedToId || req.user.id) : finalAssignedToId,
         // Add products if provided
         products: products?.length ? {
           create: products.map(p => ({
@@ -460,6 +471,16 @@ exports.assignLead = async (req, res) => {
     const lead = await prisma.lead.findUnique({ where: { id } });
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+    
+    // Validate assignment permissions for employees
+    if (req.user.role === 'EMPLOYEE') {
+      const validUserIds = await getSubordinateIds(req.user.id, true);
+      validUserIds.push(req.user.id);
+      
+      if (!validUserIds.includes(assignedToId)) {
+        return res.status(403).json({ success: false, message: 'You can only assign leads to yourself or your subordinates.' });
+      }
     }
     
     const oldAssignee = lead.assignedToId;
