@@ -253,12 +253,64 @@ export default function SalesTargets() {
                 <div className="mt-4 pt-3 border-t border-gray-100">
                   <p className="text-xs font-semibold text-gray-500 mb-2">Allocations</p>
                   <div className="space-y-1.5">
-                    {t.subTargets.map(sub => (
-                      <div key={sub.id} className="flex justify-between text-xs items-center bg-gray-50 px-2 py-1.5 rounded">
-                        <span>{sub.employee?.firstName} {sub.employee?.lastName}</span>
-                        <span className="font-mono font-medium">₹{Number(sub.revenueTarget).toLocaleString('en-IN')}</span>
-                      </div>
-                    ))}
+                    {t.subTargets.map(sub => {
+                      const revPct = Math.min(100, ((Number(sub.revenueAchieved || 0) / Number(sub.revenueTarget)) * 100)) || 0;
+                      const leadsPct = Math.min(100, ((sub.leadsAchieved || 0) / (sub.leadsTarget || 1)) * 100) || 0;
+                      const quotesPct = Math.min(100, ((sub.quotationsSent || 0) / (sub.quotationsTarget || 1)) * 100) || 0;
+                      
+                      return (
+                        <div key={sub.id} className="flex flex-col gap-2 bg-gray-50 px-3 py-2.5 rounded-lg border border-gray-100">
+                          <div className="font-semibold text-gray-800 text-xs flex justify-between">
+                            <span>{sub.employee?.firstName} {sub.employee?.lastName}</span>
+                            <span className="text-gray-500 font-normal">Allocated Progress</span>
+                          </div>
+                          
+                          {/* Revenue */}
+                          <div className="flex flex-col gap-1">
+                            <div className="flex justify-between text-[10px] items-center">
+                              <span className="text-gray-500 font-medium">Revenue</span>
+                              <span className="font-mono font-semibold">
+                                <span className={revPct >= 100 ? 'text-green-600' : 'text-gray-700'}>₹{Number(sub.revenueAchieved || 0).toLocaleString('en-IN')}</span>
+                                <span className="text-gray-400 mx-1">/</span>
+                                ₹{Number(sub.revenueTarget).toLocaleString('en-IN')}
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-1">
+                              <div className={`h-1 rounded-full ${revPct >= 100 ? 'bg-yellow-400' : 'bg-blue-500'}`} style={{ width: `${revPct}%` }} />
+                            </div>
+                          </div>
+
+                          {/* Leads & Quotes side-by-side */}
+                          <div className="grid grid-cols-2 gap-3 mt-0.5">
+                            <div className="flex flex-col gap-1">
+                              <div className="flex justify-between text-[10px] items-center">
+                                <span className="text-gray-500 font-medium">Leads</span>
+                                <span className="font-mono font-semibold">
+                                  <span className={leadsPct >= 100 ? 'text-green-600' : 'text-gray-700'}>{sub.leadsAchieved || 0}</span>
+                                  <span className="text-gray-400 mx-0.5">/</span>{sub.leadsTarget || 0}
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-1">
+                                <div className={`h-1 rounded-full ${leadsPct >= 100 ? 'bg-green-500' : 'bg-indigo-400'}`} style={{ width: `${leadsPct}%` }} />
+                              </div>
+                            </div>
+                            
+                            <div className="flex flex-col gap-1">
+                              <div className="flex justify-between text-[10px] items-center">
+                                <span className="text-gray-500 font-medium">Quotes</span>
+                                <span className="font-mono font-semibold">
+                                  <span className={quotesPct >= 100 ? 'text-green-600' : 'text-gray-700'}>{sub.quotationsSent || 0}</span>
+                                  <span className="text-gray-400 mx-0.5">/</span>{sub.quotationsTarget || 0}
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-1">
+                                <div className={`h-1 rounded-full ${quotesPct >= 100 ? 'bg-green-500' : 'bg-indigo-400'}`} style={{ width: `${quotesPct}%` }} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                     <div className="flex justify-between text-xs items-center px-2 py-1 mt-1 text-gray-400 border-t border-gray-100">
                       <span>Unallocated Amount</span>
                       <span className="font-mono">₹{(Number(t.revenueTarget) - t.subTargets.reduce((sum, sub) => sum + Number(sub.revenueTarget), 0)).toLocaleString('en-IN')}</span>

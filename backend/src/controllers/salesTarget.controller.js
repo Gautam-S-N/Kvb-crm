@@ -24,7 +24,7 @@ exports.getTargets = async (req, res) => {
       include: {
         employee: { select: { id: true, firstName: true, lastName: true } },
         createdBy: { select: { id: true, firstName: true, lastName: true } },
-        subTargets: { select: { id: true, employeeId: true, revenueTarget: true, leadsTarget: true, quotationsTarget: true, employee: { select: { firstName: true, lastName: true } } } },
+        subTargets: { select: { id: true, employeeId: true, revenueTarget: true, leadsTarget: true, quotationsTarget: true, revenueAchieved: true, leadsAchieved: true, quotationsSent: true, employee: { select: { firstName: true, lastName: true } } } },
         parentTarget: { include: { employee: { select: { firstName: true, lastName: true } } } }
       },
       orderBy: [{ periodYear: 'desc' }, { periodNumber: 'desc' }]
