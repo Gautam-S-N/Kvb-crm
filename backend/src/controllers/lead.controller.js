@@ -1,6 +1,7 @@
 const prisma = require('../utils/db');
-
+const { incrementAndGet, syncCounterToMax } = require('../services/counter.service');
 const { getSubordinateIds } = require('../middleware/permission.middleware');
+const { triggerRefreshForEmployee } = require('../services/achievement.service');
 
 // Get all leads with filters
 exports.getLeads = async (req, res) => {
@@ -294,9 +295,12 @@ exports.createLead = async (req, res) => {
       customerId = newCustomer.id;
     }
     
-    // Generate lead number
-    const leadCount = await prisma.lead.count();
-    const leadNumber = `L-${String(leadCount + 1).padStart(5, '0')}`;
+    // Generate lead number — atomic counter prevents collisions under concurrent requests
+    // On first use, sync the counter to current max to avoid clashing with existing records
+    const existingMax = await prisma.lead.count();
+    await syncCounterToMax('LEAD', existingMax);
+    const nextNum = await incrementAndGet('LEAD');
+    const leadNumber = `L-${String(nextNum).padStart(5, '0')}`;
     
     // Create lead
     const lead = await prisma.lead.create({
@@ -465,6 +469,12 @@ exports.updateLead = async (req, res) => {
     if (ioRefresh) {
       ioRefresh.emit('REFRESH_DATA', { module: 'LEADS' });
       ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    }
+
+    // If a lead just moved to WON, immediately refresh target achievements
+    // for the assignee. This is the primary real-time trigger for leadsAchieved.
+    if (newStatus === 'WON' && newStatus !== oldStatus) {
+      triggerRefreshForEmployee(updated.assignedToId, ioRefresh);
     }
 
     res.json({ success: true, data: updated });
@@ -697,6 +707,9 @@ exports.addLeadProduct = async (req, res) => {
 };
 
 // Bulk Import Leads from CSV
+// - Processes rows in batches of 50 (each batch is a single transaction)
+// - Detects duplicate phone/email per row and flags them instead of creating duplicates
+// - Returns a detailed per-row error report on failure
 exports.importLeads = async (req, res) => {
   try {
     const { rows } = req.body; // array of { title, phone, email, source, estimateAmount, description, companyName }
@@ -704,52 +717,97 @@ exports.importLeads = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No rows provided' });
     }
 
+    const BATCH_SIZE = 50;
     let imported = 0;
     let skipped = 0;
-    const errors = [];
+    const failedRows = []; // Detailed per-row failure info
+    const duplicateRows = []; // Rows that matched an existing customer
 
-    for (const row of rows) {
+    // Sync counter once before the import to avoid repeated DB calls
+    const existingMax = await prisma.lead.count();
+    await syncCounterToMax('LEAD', existingMax);
+
+    // Process in batches
+    for (let batchStart = 0; batchStart < rows.length; batchStart += BATCH_SIZE) {
+      const batch = rows.slice(batchStart, batchStart + BATCH_SIZE);
+
       try {
-        const { title, phone, email, source, estimateAmount, description, companyName } = row;
-        if (!title || !phone) { skipped++; continue; }
+        await prisma.$transaction(async (tx) => {
+          for (let i = 0; i < batch.length; i++) {
+            const rowIndex = batchStart + i + 1; // 1-based row number for error reporting
+            const row = batch[i];
+            const { title, phone, email, source, estimateAmount, description, companyName } = row;
 
-        // Find or create customer
-        let customer = await prisma.customer.findFirst({ where: { phone: String(phone) } });
-        if (!customer) {
-          customer = await prisma.customer.create({
-            data: {
-              contactName: String(title),
-              phone: String(phone),
-              email: email ? String(email) : null,
-              companyName: companyName ? String(companyName) : null,
+            if (!title || !phone) {
+              skipped++;
+              failedRows.push({ row: rowIndex, reason: 'Missing required fields: title or phone' });
+              continue;
             }
-          });
-        }
 
-        const leadCount = await prisma.lead.count();
-        const leadNumber = `L-${String(leadCount + 1).padStart(5, '0')}`;
+            // Duplicate detection — check by phone AND email
+            const existingCustomer = await tx.customer.findFirst({
+              where: {
+                OR: [
+                  { phone: String(phone) },
+                  ...(email ? [{ email: String(email) }] : [])
+                ]
+              }
+            });
 
-        await prisma.lead.create({
-          data: {
-            leadNumber,
-            title: String(title),
-            description: description ? String(description) : null,
-            status: 'NEW',
-            source: source ? String(source).toUpperCase() : 'OTHER',
-            estimateAmount: estimateAmount ? parseFloat(estimateAmount) : null,
-            customerId: customer.id,
-            createdById: req.user.id,
-            assignedToId: req.user.id,
+            let customerId;
+            if (existingCustomer) {
+              customerId = existingCustomer.id;
+              duplicateRows.push({ row: rowIndex, phone, email, message: 'Linked to existing customer' });
+            } else {
+              const newCustomer = await tx.customer.create({
+                data: {
+                  contactName: String(title),
+                  phone: String(phone),
+                  email: email ? String(email) : null,
+                  companyName: companyName ? String(companyName) : null,
+                }
+              });
+              customerId = newCustomer.id;
+            }
+
+            // Atomic lead number — each row gets a unique number
+            const nextNum = await incrementAndGet('LEAD');
+            const leadNumber = `L-${String(nextNum).padStart(5, '0')}`;
+
+            await tx.lead.create({
+              data: {
+                leadNumber,
+                title: String(title),
+                description: description ? String(description) : null,
+                status: 'NEW',
+                source: source ? String(source).toUpperCase() : 'OTHER',
+                estimateAmount: estimateAmount ? parseFloat(estimateAmount) : null,
+                customerId,
+                createdById: req.user.id,
+                assignedToId: req.user.id,
+              }
+            });
+            imported++;
           }
         });
-        imported++;
-      } catch (e) {
-        skipped++;
-        errors.push(e.message);
+      } catch (batchError) {
+        // If a batch fails, record all rows in that batch as failed
+        for (let i = 0; i < batch.length; i++) {
+          const rowIndex = batchStart + i + 1;
+          failedRows.push({ row: rowIndex, reason: batchError.message });
+          skipped++;
+        }
       }
     }
 
-    res.json({ success: true, imported, skipped, errors: errors.slice(0, 5) });
+    res.json({
+      success: true,
+      imported,
+      skipped,
+      duplicatesLinked: duplicateRows.length,
+      failedRows: failedRows.slice(0, 20), // Return up to 20 detailed errors
+      duplicateRows: duplicateRows.slice(0, 10)
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

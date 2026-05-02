@@ -1,4 +1,5 @@
 const prisma = require('../utils/db');
+const { refreshTargets } = require('../services/achievement.service');
 
 // GET /api/targets
 exports.getTargets = async (req, res) => {
@@ -187,88 +188,25 @@ const getPeriodDates = (periodType, periodYear, periodNumber) => {
 // POST /api/targets/refresh — manually refresh attainment for active targets
 exports.refreshAttainment = async (req, res) => {
   try {
-    const { targetId } = req.body; // Allow refreshing a specific target or all active
-    
+    const { targetId } = req.body;
+    const io = req.app?.get('io');
+
     const where = {};
     if (targetId) {
       where.id = targetId;
     } else {
-      // Find targets that overlap with "now"
-      const now = new Date();
-      where.periodYear = now.getFullYear();
+      // Default: refresh all targets for the current year
+      where.periodYear = new Date().getFullYear();
     }
 
-    const targets = await prisma.salesTarget.findMany({ where });
+    const { refreshed, errors } = await refreshTargets(where, io);
 
-    const updates = await Promise.all(targets.map(async (t) => {
-      const { start, end } = getPeriodDates(t.periodType, t.periodYear, t.periodNumber);
-
-      const [salesAgg, wonLeads, quotationsSent, subTargetsAgg] = await Promise.all([
-        prisma.sale.aggregate({
-          where: { createdById: t.employeeId, createdAt: { gte: start, lt: end } },
-          _sum: { totalAmount: true }
-        }),
-        prisma.lead.count({
-          where: { assignedToId: t.employeeId, status: 'WON', updatedAt: { gte: start, lt: end } }
-        }),
-        prisma.quotation.count({
-          where: { createdById: t.employeeId, createdAt: { gte: start, lt: end } }
-        }),
-        // Roll-up: also add achievements from any sub-targets allocated to subordinates
-        prisma.salesTarget.aggregate({
-          where: { parentTargetId: t.id },
-          _sum: { revenueAchieved: true, leadsAchieved: true, quotationsSent: true }
-        })
-      ]);
-
-      const directRevenue = parseFloat(salesAgg._sum.totalAmount || 0);
-      const subRevenue = parseFloat(subTargetsAgg._sum.revenueAchieved || 0);
-      const revenueAchieved = directRevenue + subRevenue;
-
-      const totalLeads = wonLeads + (subTargetsAgg._sum.leadsAchieved || 0);
-      const totalQuotes = quotationsSent + (subTargetsAgg._sum.quotationsSent || 0);
-
-      const prevPct = (Number(t.revenueAchieved) / Number(t.revenueTarget)) * 100;
-      const newPct  = (revenueAchieved / Number(t.revenueTarget)) * 100;
-
-      const updated = await prisma.salesTarget.update({
-        where: { id: t.id },
-        data: { revenueAchieved, leadsAchieved: totalLeads, quotationsSent: totalQuotes }
-      });
-
-      // Emit notifications
-      const io = req.app?.get('io');
-      if (io) {
-        if (prevPct < 50 && newPct >= 50) {
-          io.emit('notification', { 
-            type: 'TARGET_MILESTONE', 
-            title: '🎉 50% Target Reached!', 
-            body: `You've hit 50% of your ${t.periodType.toLowerCase()} revenue target!`, 
-            entityType: 'target', 
-            entityId: t.id, 
-            targetUserId: t.employeeId 
-          });
-        }
-        if (prevPct < 100 && newPct >= 100) {
-          io.emit('notification', { 
-            type: 'TARGET_MILESTONE', 
-            title: '🏆 100% Target Achieved!', 
-            body: `Congratulations! You've hit your ${t.periodType.toLowerCase()} revenue target!`, 
-            entityType: 'target', 
-            entityId: t.id, 
-            targetUserId: t.employeeId 
-          });
-        }
-      }
-      return updated;
-    }));
-
-    const ioRefresh = req.app?.get('io');
-    if (ioRefresh) {
-      ioRefresh.emit('REFRESH_DATA', { module: 'TARGETS' });
-    }
-
-    res.json({ success: true, message: `Refreshed ${updates.length} target(s)`, data: updates });
+    res.json({
+      success: true,
+      message: `Refreshed ${refreshed} target(s)${errors.length > 0 ? ` (${errors.length} error(s) — see server logs)` : ''}`,
+      refreshed,
+      errors
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

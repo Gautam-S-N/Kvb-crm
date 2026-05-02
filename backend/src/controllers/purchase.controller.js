@@ -3,6 +3,7 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const ExcelJS = require('exceljs');
+const { incrementAndGet, syncCounterToMax } = require('../services/counter.service');
 
 // Pre-load logo as base64 once at startup
 const LOGO_PATH = path.join(__dirname, '../assets/logo.jpg');
@@ -10,13 +11,20 @@ const LOGO_B64  = fs.existsSync(LOGO_PATH)
   ? `data:image/jpeg;base64,${fs.readFileSync(LOGO_PATH).toString('base64')}`
   : null;
 
+// Generates a unique, atomic PO number. Uses a dedicated counter table to
+// prevent duplicate numbers when multiple POs are created concurrently.
 const generatePONumber = async () => {
   const now = new Date();
   const fy = now.getMonth() >= 3
     ? `${String(now.getFullYear()).slice(2)}/${String(now.getFullYear() + 1).slice(2)}`
     : `${String(now.getFullYear() - 1).slice(2)}/${String(now.getFullYear()).slice(2)}`;
-  const count = await prisma.purchaseOrder.count();
-  return `KVB-${fy}-${String(count + 1).padStart(4, '0')}`;
+
+  // Sync counter to existing max on first use to avoid collisions with old data
+  const existingMax = await prisma.purchaseOrder.count();
+  await syncCounterToMax('PURCHASE_ORDER', existingMax);
+  const counter = await incrementAndGet('PURCHASE_ORDER');
+
+  return `KVB-${fy}-${String(counter).padStart(4, '0')}`;
 };
 
 const ensureDir = (p) => { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); };

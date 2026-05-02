@@ -1,54 +1,48 @@
+/**
+ * targetCron.js
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Nightly cron that refreshes ALL active targets for the current year.
+ *
+ * FIXES vs old version:
+ *  - Now handles ALL period types (WEEKLY, MONTHLY, QUARTERLY, YEARLY) — not just MONTHLY.
+ *  - Uses the AchievementService which processes children BEFORE parents (bottom-up),
+ *    preventing the "manager data overwritten with only direct sales" bug.
+ *  - Archived records are excluded by the AchievementService automatically.
+ *  - All failures are logged with context. A single target failure no longer
+ *    halts the entire run.
+ *
+ * Runs at: 23:55 every night (configurable via CRON_TARGET_REFRESH env var).
+ */
+
 const cron = require('node-cron');
+const { refreshTargets } = require('../services/achievement.service');
 
-// Run everyday at 23:55 (11:55 PM) to automatically refresh target attainments globally
-const startCronJobs = () => {
-  cron.schedule('55 23 * * *', async () => {
-    console.log('[CRON] Running daily Target Attainment refresh...');
+const startCronJobs = (app) => {
+  const schedule = process.env.CRON_TARGET_REFRESH || '55 23 * * *';
+
+  cron.schedule(schedule, async () => {
+    console.log('[CRON] Starting nightly Target Attainment refresh...');
+    const io = app ? app.get('io') : null;
+
     try {
-      // In a real production scenario, doing this via internal DB logic instead of http request is safer,
-      // but hitting the API is an easy standardized way to trigger the refresh logic with its side effects.
-      // E.g. we'd have a system admin token or extract the logic. For now, doing direct DB import.
-      
-      const { PrismaClient } = require('@prisma/client');
-      const prisma = new PrismaClient();
-      
       const now = new Date();
-      const currentMonth = now.getMonth() + 1;
-      const currentYear  = now.getFullYear();
+      // Refresh all targets whose periodYear matches the current calendar year
+      const { refreshed, errors } = await refreshTargets(
+        { periodYear: now.getFullYear() },
+        io
+      );
 
-      const targets = await prisma.salesTarget.findMany({
-        where: { periodType: 'MONTHLY', periodYear: currentYear, periodNumber: currentMonth }
-      });
-
-      for (const t of targets) {
-        const monthStart = new Date(t.periodYear, t.periodNumber - 1, 1);
-        const monthEnd   = new Date(t.periodYear, t.periodNumber, 1);
-
-        const [salesAgg, wonLeads, quotationsSent] = await Promise.all([
-          prisma.sale.aggregate({
-            where: { createdById: t.employeeId, createdAt: { gte: monthStart, lt: monthEnd } },
-            _sum: { totalAmount: true }
-          }),
-          prisma.lead.count({
-            where: { assignedToId: t.employeeId, status: 'WON', updatedAt: { gte: monthStart, lt: monthEnd } }
-          }),
-          prisma.quotation.count({
-            where: { createdById: t.employeeId, createdAt: { gte: monthStart, lt: monthEnd } }
-          })
-        ]);
-
-        const revenueAchieved = parseFloat(salesAgg._sum.totalAmount || 0);
-
-        await prisma.salesTarget.update({
-          where: { id: t.id },
-          data: { revenueAchieved, leadsAchieved: wonLeads, quotationsSent }
-        });
+      if (errors.length > 0) {
+        console.warn(`[CRON] Refresh completed with ${errors.length} error(s):`);
+        errors.forEach(e => console.warn(' -', e));
       }
-      console.log(`[CRON] Refreshed ${targets.length} targets successfully.`);
-    } catch (error) {
-      console.error('[CRON] Error running Target Attainment sync:', error.message);
+
+      console.log(`[CRON] Target refresh done. Refreshed: ${refreshed}, Errors: ${errors.length}`);
+    } catch (err) {
+      console.error('[CRON] Fatal error during Target Attainment refresh:', err.message);
     }
   });
 };
 
+// Support both old usage (no app) and new usage (with app for io access)
 module.exports = startCronJobs;

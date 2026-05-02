@@ -2,6 +2,7 @@ const prisma = require('../utils/db');
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
+const { triggerRefreshForEmployee } = require('../services/achievement.service');
 
 // ─── Load company logo as Base64 (embedded in PDF — Puppeteer can't fetch URLs) ─
 const getLogoBase64 = () => {
@@ -715,6 +716,10 @@ exports.createSale = async (req, res) => {
       ioRefresh.emit('REFRESH_DATA', { module: 'SALES' });
       ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
+
+    // Fire-and-forget: refresh this employee's targets in the background.
+    // Does not block the HTTP response. Errors are caught and logged internally.
+    triggerRefreshForEmployee(req.user.id, ioRefresh);
 
     res.status(201).json({ success: true, data: sale });
   } catch (error) {

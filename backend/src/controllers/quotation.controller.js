@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { numberToWords } = require('../utils/numberToWords');
+const { triggerRefreshForEmployee } = require('../services/achievement.service');
 
 // Product code map for structured quotation numbers
 const PRODUCT_CODE_MAP = {
@@ -278,6 +279,9 @@ exports.createQuotation = async (req, res) => {
       ioRefresh.emit('REFRESH_DATA', { module: 'QUOTATIONS' });
       ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
+
+    // Fire-and-forget: update quotationsSent count for this employee's active targets
+    triggerRefreshForEmployee(req.user.id, ioRefresh);
 
     res.status(201).json({ success: true, data: quotation });
   } catch (error) {

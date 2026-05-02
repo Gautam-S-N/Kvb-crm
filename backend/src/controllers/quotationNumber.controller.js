@@ -7,6 +7,11 @@
  */
 const prisma = require('../utils/db');
 const { v4: uuidv4 } = require('uuid');
+const {
+  createRevision,
+  getNextRevisionMeta,
+  getVersionChain
+} = require('../services/quotation.version.service');
 
 // ─── Product Code Map ────────────────────────────────────────────────────────
 const PRODUCT_CODE_MAP = {
@@ -219,155 +224,20 @@ exports.reviseQuotation = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const original = await prisma.quotation.findUnique({
-      where: { id },
-      include: { items: true },
-    });
-    if (!original) {
-      return res.status(404).json({ success: false, message: 'Quotation not found' });
+    // Delegate entirely to the version service.
+    // The service pre-populates all fields from the latest version, so any
+    // field the frontend doesn't send is preserved from the previous revision.
+    const newVersion = await createRevision(id, req.body, req.user.id);
+
+    const ioRefresh = req.app.get('io');
+    if (ioRefresh) {
+      ioRefresh.emit('REFRESH_DATA', { module: 'QUOTATIONS' });
     }
 
-    // Determine root ID using raw SQL (parentId not in stale Prisma client)
-    const [origRaw] = await prisma.$queryRawUnsafe(
-      'SELECT parentId FROM quotations WHERE id = ?', id
-    );
-    const rootId = origRaw.parentId || id;
-
-    // Count all versions under this root
-    const [countRow] = await prisma.$queryRawUnsafe(
-      'SELECT COUNT(*) AS cnt FROM quotations WHERE id = ? OR parentId = ?',
-      rootId, rootId
-    );
-    const versionCount = Number(countRow.cnt);
-    const newVersionLabel = versionToLabel(versionCount); // A=0, B=1, C=2
-
-    // Rebuild quotation number with new version (preserving formatting and custom prefixes)
-    let newQtnNumber = original.quotationNumber;
-    if (newQtnNumber.startsWith('QTN.')) {
-      // QTN (0) . KVB (1) . STD (2) . 005 (3) . A (4) . [Date (5)]
-      const parts = newQtnNumber.split('.');
-      if (parts.length >= 5) {
-        parts[4] = newVersionLabel;
-        newQtnNumber = parts.join('.');
-      }
-    } else {
-      // Legacy format: Q-00024 or Q-00024-B
-      if (/-[A-Z]$/.test(newQtnNumber)) {
-        newQtnNumber = newQtnNumber.slice(0, -1) + newVersionLabel;
-      } else {
-        newQtnNumber = newQtnNumber + '-' + newVersionLabel;
-      }
-    }
-
-    // Mark all versions as not latest
-    await prisma.$executeRawUnsafe(
-      'UPDATE quotations SET isLatest = 0 WHERE id = ? OR parentId = ?',
-      rootId, rootId
-    );
-
-    const {
-      items,
-      customFields,
-      paymentTerms,
-      deliveryTerms,
-      notes,
-      termsConditions,
-      discountAmount,
-      discountPercent,
-    } = req.body;
-
-    // Calculate totals from line items (similar to createQuotation)
-    let subTotal = 0;
-    const quotationItems = items.map(item => {
-      const totalPrice = item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100);
-      subTotal += totalPrice;
-      return {
-        productId: item.productId,
-        description: item.description,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        discount: item.discount || 0,
-        taxRate: item.taxRate || 18,
-        totalPrice
-      };
-    });
-
-    const discountAmt = discountAmount || (subTotal * (discountPercent || 0) / 100);
-    let taxableAmount = subTotal - discountAmt;
-    const gstRate = (customFields && customFields.gstRate != null) ? customFields.gstRate : 18;
-    let taxAmount = taxableAmount * (gstRate / 100);
-    let totalAmount = taxableAmount + taxAmount;
-
-    // For Solar Tunnel Dryer
-    if (original.templateType === 'SOLAR_TUNNEL_DRYER' && customFields) {
-      const cfQty   = parseFloat(customFields.qty) || 1;
-      const cfPrice = parseFloat(customFields.unitPrice) || parseFloat(customFields.totalAmt) || 0;
-      const cfTotal = cfQty * cfPrice;
-      customFields.totalAmt = cfTotal;
-      customFields.unitPrice = cfPrice;
-      if (cfTotal > 0) {
-        totalAmount = cfTotal;
-        taxAmount   = 0;
-        subTotal    = cfTotal;
-      }
-    }
-
-    // Create the new revision using the edited fields
-    const newVersion = await prisma.quotation.create({
-      data: {
-        quotationNumber: newQtnNumber,
-        version:         versionCount + 1,
-        status:          'DRAFT',
-        leadId:          original.leadId,
-        customerId:      original.customerId,
-        createdById:     req.user.id,
-        subTotal,
-        discountAmount:  discountAmt,
-        discountPercent: discountPercent || 0,
-        taxAmount,
-        totalAmount,
-        quotationDate:   new Date(),
-        validUntil:      original.validUntil,
-        paymentTerms,
-        deliveryTerms,
-        notes,
-        termsConditions,
-        templateType:    original.templateType,
-        customFields:    customFields ? JSON.parse(JSON.stringify(customFields)) : null,
-        items: {
-          create: quotationItems
-        },
-      },
-
-      include: {
-        items: { include: { product: true } },
-        customer: true,
-        lead: true,
-      },
-    });
-
-    // Set new versioning columns via raw SQL
-    await prisma.$executeRawUnsafe(
-      'UPDATE quotations SET versionLabel = ?, isLatest = 1, parentId = ? WHERE id = ?',
-      newVersionLabel, rootId, newVersion.id
-    );
-
-    await prisma.leadTimeline.create({
-      data: {
-        leadId:      original.leadId,
-        action:      'Quotation Revised',
-        description: `Version ${newVersionLabel} created: ${newQtnNumber}`,
-        performedBy: req.user.id,
-      },
-    });
-
-    // Return enriched data with version info added
-    res.status(201).json({
-      success: true,
-      data: { ...newVersion, versionLabel: newVersionLabel, parentId: rootId, isLatest: true },
-    });
+    res.status(201).json({ success: true, data: newVersion });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    const status = error.message.includes('already exists') ? 409 : 500;
+    res.status(status).json({ success: false, message: error.message });
   }
 };
 
@@ -376,40 +246,11 @@ exports.reviseQuotation = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getNextRevisionInfo = async (req, res) => {
   try {
-    const { id } = req.params;
-    const original = await prisma.quotation.findUnique({ where: { id } });
-    if (!original) return res.status(404).json({ success: false, message: 'Not found' });
-
-    const [origRaw] = await prisma.$queryRawUnsafe('SELECT parentId FROM quotations WHERE id = ?', id);
-    const rootId = origRaw?.parentId || id;
-
-    const [countRow] = await prisma.$queryRawUnsafe(
-      'SELECT COUNT(*) AS cnt FROM quotations WHERE id = ? OR parentId = ?', rootId, rootId
-    );
-    const versionCount = Number(countRow.cnt);
-    const newVersionLabel = versionToLabel(versionCount);
-
-    let newQtnNumber = original.quotationNumber;
-    if (newQtnNumber.startsWith('QTN.')) {
-      const parts = newQtnNumber.split('.');
-      if (parts.length >= 5) {
-        parts[4] = newVersionLabel;
-        newQtnNumber = parts.join('.');
-      }
-    } else {
-      if (/-[A-Z]$/.test(newQtnNumber)) {
-        newQtnNumber = newQtnNumber.slice(0, -1) + newVersionLabel;
-      } else {
-        newQtnNumber = newQtnNumber + '-' + newVersionLabel;
-      }
-    }
-
-    res.json({
-      success: true,
-      data: { quotationNumber: newQtnNumber, versionLabel: newVersionLabel }
-    });
+    const { newVersionLabel, newQuotationNumber } = await getNextRevisionMeta(req.params.id);
+    res.json({ success: true, data: { quotationNumber: newQuotationNumber, versionLabel: newVersionLabel } });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    const status = error.message.includes('not found') ? 404 : 500;
+    res.status(status).json({ success: false, message: error.message });
   }
 };
 
@@ -418,57 +259,11 @@ exports.getNextRevisionInfo = async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getVersionHistory = async (req, res) => {
   try {
-    const { id } = req.params;
-
-    // Get parentId via raw SQL
-    const [qRow] = await prisma.$queryRawUnsafe(
-      'SELECT id, parentId FROM quotations WHERE id = ?', id
-    );
-    if (!qRow) {
-      return res.status(404).json({ success: false, message: 'Quotation not found' });
-    }
-
-    const rootId = qRow.parentId || qRow.id;
-
-    // Fetch all IDs in this version chain
-    const versionIds = await prisma.$queryRawUnsafe(
-      'SELECT id FROM quotations WHERE id = ? OR parentId = ? ORDER BY version ASC',
-      rootId, rootId
-    );
-
-    const ids = versionIds.map(r => r.id);
-    if (!ids.length) return res.json({ success: true, data: [] });
-
-    // Fetch full quotation objects + extra raw fields
-    const quotations = await prisma.quotation.findMany({
-      where: { id: { in: ids } },
-      include: {
-        createdBy: { select: { firstName: true, lastName: true } },
-        items: { include: { product: true } },
-        customer: { select: { contactName: true, companyName: true } },
-      },
-      orderBy: { version: 'asc' },
-    });
-
-    // Merge raw versioning columns
-    const rawRows = await prisma.$queryRawUnsafe(
-      `SELECT id, versionLabel, isLatest, parentId, originalDate
-       FROM quotations WHERE id IN (${ids.map(() => '?').join(',')})`,
-      ...ids
-    );
-    const rawMap = Object.fromEntries(rawRows.map(r => [r.id, r]));
-
-    const enriched = quotations.map(q => ({
-      ...q,
-      versionLabel: rawMap[q.id]?.versionLabel || 'A',
-      isLatest:     rawMap[q.id]?.isLatest === 1,
-      parentId:     rawMap[q.id]?.parentId || null,
-      originalDate: rawMap[q.id]?.originalDate || q.quotationDate,
-    }));
-
-    res.json({ success: true, data: enriched });
+    const chain = await getVersionChain(req.params.id);
+    res.json({ success: true, data: chain });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    const status = error.message.includes('not found') ? 404 : 500;
+    res.status(status).json({ success: false, message: error.message });
   }
 };
 

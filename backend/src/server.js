@@ -20,6 +20,7 @@ const exportRoutes = require('./routes/export.routes');
 const startCronJobs = require('./jobs/targetCron');
 const startFollowUpReminderJob = require('./jobs/followupReminder');
 const startTodoReminderJob = require('./jobs/todoReminder');
+const startTaskCron = require('./jobs/taskCron');
 const todoRoutes = require('./routes/todo.routes');
 const activityLogRoutes = require('./routes/activityLog.routes');
 
@@ -91,11 +92,12 @@ const startTargetAutomationJob = require('./jobs/targetAutomation');
 const startLeadEscalationJob = require('./jobs/leadEscalation');
 
 // Start background cron jobs
-startCronJobs();
+startCronJobs(app);        // Nightly target refresh (now uses app for socket.io)
 startFollowUpReminderJob(app);
 startTodoReminderJob(app);
 startTargetAutomationJob(app);
 startLeadEscalationJob(app);
+startTaskCron(app);        // Hourly: marks overdue tasks + escalation
 
 // API Routes
 app.use('/api/auth', authRoutes);
