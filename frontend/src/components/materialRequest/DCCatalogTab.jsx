@@ -74,18 +74,12 @@ export default function DCCatalogTab() {
         </button>
       </div>
 
-      {/* Search + category filters */}
+      {/* Search filter only */}
       <div className="flex flex-col gap-3 mb-4">
         <div className="relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by name or code…"
             className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"/>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {['ALL',...CATS].map(c=>(
-            <button key={c} onClick={()=>setCat(c)}
-              className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-colors ${cat===c?'bg-green-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{c}</button>
-          ))}
         </div>
       </div>
 

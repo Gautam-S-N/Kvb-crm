@@ -132,8 +132,8 @@ export default function MaterialRequests() {
     setIsRecording(false);
   };
 
-  const markAllBought = async (req) => {
-    if (!confirm('Mark all items as bought?')) return;
+  const markAllSent = async (req) => {
+    if (!confirm('Mark all items as sent?')) return;
     for (const item of req.items) {
       if (!item.isPurchased) {
         await toggleItemPurchased(req.id, item.id, true, '');
@@ -175,6 +175,27 @@ export default function MaterialRequests() {
     });
   };
 
+  const toggleSelectAll = () => {
+    const allIds = catalogRows.map(m => m.id);
+    const areAllSelected = allIds.every(id => !!selectedItems[id]);
+
+    if (areAllSelected) {
+      setSelectedItems(prev => {
+        const next = { ...prev };
+        allIds.forEach(id => delete next[id]);
+        return next;
+      });
+    } else {
+      setSelectedItems(prev => {
+        const next = { ...prev };
+        catalogRows.forEach(m => {
+          if (!next[m.id]) next[m.id] = { qty: 1, notes: '', item: m };
+        });
+        return next;
+      });
+    }
+  };
+
   return (
     <Layout>
       <div className="flex items-center justify-between mb-5">
@@ -193,8 +214,10 @@ export default function MaterialRequests() {
       <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit mb-6">
         {[
           { key: 'requests', label: '📋 Material Requests' },
-          { key: 'dc',       label: '🔩 DC Raw Materials' },
-          { key: 'dryer',    label: '☀️ Dryer Components' },
+          ...(canCreate ? [
+            { key: 'dc',       label: '🔩 DC Raw Materials' },
+            { key: 'dryer',    label: '☀️ Dryer Components' },
+          ] : []),
         ].map(t => (
           <button key={t.key} onClick={() => setActiveTab(t.key)}
             className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${
@@ -255,10 +278,10 @@ export default function MaterialRequests() {
                 {total > 0 && (
                   <div>
                     <div className="flex justify-between text-[10px] text-gray-500 mb-1">
-                      <span>Purchased</span><span>{purchased}/{total} ({pct}%)</span>
+                      <span>Delivered</span><span>{purchased}/{total} ({pct}%)</span>
                     </div>
                     <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                      <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${pct}%` }}/>
+                      <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${pct}%` }}/>
                     </div>
                   </div>
                 )}
@@ -341,9 +364,9 @@ export default function MaterialRequests() {
                                   } catch (e) { alert(e.message); }
                                   setSaving(false);
                                 }}
-                                className={`px-2 py-0.5 rounded text-[9px] font-bold transition-colors ${item.isPurchased ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}
+                                className={`px-2 py-0.5 rounded text-[9px] font-bold transition-colors ${item.isPurchased ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}
                               >
-                                Bought
+                                Sent
                               </button>
                               <button
                                 disabled={saving}
@@ -361,7 +384,7 @@ export default function MaterialRequests() {
                                 }}
                                 className={`px-2 py-0.5 rounded text-[9px] font-bold transition-colors ${!item.isPurchased ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-400 hover:bg-gray-200'}`}
                               >
-                                Not Bought
+                                Not Sent
                               </button>
                             </div>
                           </td>
@@ -388,9 +411,9 @@ export default function MaterialRequests() {
 
               {!canCreate && detailReq.status !== 'COMPLETE' && detailReq.status !== 'INCOMPLETE' && (
                 <div className="space-y-3 pt-2">
-                  <button onClick={() => markAllBought(detailReq)}
-                    className="w-full py-2 bg-green-50 text-green-700 text-xs font-bold rounded-lg border border-green-200 hover:bg-green-100 flex items-center justify-center gap-2">
-                    <CheckCircle size={14}/> Mark All Items as Bought
+                  <button onClick={() => markAllSent(detailReq)}
+                    className="w-full py-2 bg-blue-50 text-blue-700 text-xs font-bold rounded-lg border border-blue-200 hover:bg-blue-100 flex items-center justify-center gap-2">
+                    <CheckCircle size={14}/> Mark All Items as Sent
                   </button>
                   <div className="flex gap-3">
                     <button onClick={() => { setStatusModal({ id: detailReq.id, targetStatus: 'COMPLETE' }); setDetailReq(null); }}
@@ -412,7 +435,7 @@ export default function MaterialRequests() {
       {/* ── Create / Edit Modal ── */}
       {showCreate && (
         <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <h2 className="font-bold text-lg">{editingReq ? 'Edit Request' : 'New Material Request'}</h2>
               <button onClick={resetCreate}><X size={20} className="text-gray-400 hover:text-black"/></button>
@@ -470,24 +493,18 @@ export default function MaterialRequests() {
                   ))}
                 </div>
 
-                {/* Sub-category pills — DC only */}
-                {catFilter === 'dc' && (
-                  <div className="flex gap-1.5 flex-wrap mb-2">
-                    {['ALL','Sq. Tube','Flat Plate','Rec. Tube','Hardware','Round Tube','Round Rod','L Angle','C Channel'].map(c => (
-                      <button key={c} type="button" onClick={() => setSubCat(c)}
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold transition-colors ${subCat === c ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                        {c}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
                 {/* Catalog table */}
-                <div className="border border-gray-100 rounded-lg overflow-hidden max-h-60 overflow-y-auto">
+                <div className="border border-gray-100 rounded-lg overflow-hidden max-h-[450px] overflow-y-auto">
                   <table className="w-full text-xs">
                     <thead className={`text-gray-500 uppercase sticky top-0 ${catFilter === 'dryer' ? 'bg-amber-50' : 'bg-gray-50'}`}>
                       <tr>
-                        <th className="px-3 py-2 w-8"></th>
+                        <th className="px-3 py-2 w-8">
+                          <input type="checkbox" 
+                            checked={catalogRows.length > 0 && catalogRows.every(m => !!selectedItems[m.id])}
+                            onChange={toggleSelectAll}
+                            className="rounded"
+                          />
+                        </th>
                         <th className="px-3 py-2 text-left">Item Name</th>
                         <th className="px-3 py-2 text-left">Code</th>
                         {catFilter === 'dc' && <th className="px-3 py-2 text-left">Category</th>}
