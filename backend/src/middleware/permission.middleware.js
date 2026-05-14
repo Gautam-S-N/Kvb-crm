@@ -82,7 +82,8 @@ const requireModule = (moduleName) => {
 // Middleware to check elevated permissions
 // Reads the native Boolean columns (canAssignLeads, canAssignTasks, canViewSubordinates)
 // for fast, indexable lookups instead of parsing the JSON blob.
-const NATIVE_PERM_COLUMNS = ['canAssignLeads', 'canAssignTasks', 'canViewSubordinates'];
+const NATIVE_PERM_COLUMNS = ['canAssignLeads', 'canAssignTasks', 'canViewSubordinates', 'canCreateMaterialRequests'];
+
 
 const requireElevated = (permissionName) => {
   return async (req, res, next) => {

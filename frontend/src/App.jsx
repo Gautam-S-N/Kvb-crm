@@ -25,6 +25,10 @@ import TodoList          from './pages/TodoList';
 import EmployeeTracking  from './pages/EmployeeTracking';
 import Quotations        from './pages/Quotations';
 import Inventory         from './pages/Inventory';
+import MaterialRequests  from './pages/MaterialRequests';
+
+
+
 
 // Auth guard helper
 const PrivateRoute = ({ element, roles }) => {
@@ -74,7 +78,11 @@ function App() {
         } else if (module === 'TODOS') {
           const { useTodoStore } = await import('./stores/todoStore');
           useTodoStore.getState().fetchTodos();
+        } else if (module === 'MATERIAL_REQUESTS') {
+          const { useMaterialRequestStore } = await import('./stores/materialRequestStore');
+          useMaterialRequestStore.getState().fetchRequests();
         } else if (module === 'TARGETS') {
+
           const { useTargetStore } = await import('./stores/targetStore');
           useTargetStore.getState().fetchTargets();
         }
@@ -110,7 +118,11 @@ function App() {
         <Route path="/purchase/new" element={<PrivateRoute element={<CreatePurchaseOrder />} />} />
         <Route path="/purchase/edit/:id" element={<PrivateRoute element={<CreatePurchaseOrder />} />} />
         <Route path="/purchase/items" element={<PrivateRoute element={<PurchaseItems />} />} />
-        <Route path="/inventory"   element={<PrivateRoute element={<Inventory />} />} />
+        <Route path="/inventory"         element={<PrivateRoute element={<Inventory />} />} />
+        <Route path="/material-requests"  element={<PrivateRoute element={<MaterialRequests />} />} />
+
+
+
         <Route path="/tasks"       element={<PrivateRoute element={<Tasks />} />} />
         <Route path="/daily-reports" element={<PrivateRoute element={<DailyReports />} />} />
         <Route path="/targets"       element={<PrivateRoute element={<SalesTargets />} />} />

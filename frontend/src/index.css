@@ -1,3 +1,56 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /* Custom sleek scrollbar for Chrome, Safari, and newer Edge */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #ccc;
+    border-radius: 10px;
+    border: 2px solid #f1f1f1;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #999;
+  }
+
+  /* Dark mode / Sidebar specific scrollbar */
+  .dark-scrollbar::-webkit-scrollbar-track,
+  aside::-webkit-scrollbar-track,
+  .bg-slate-900::-webkit-scrollbar-track {
+    background: #1e293b; /* slate-800ish */
+  }
+
+  .dark-scrollbar::-webkit-scrollbar-thumb,
+  aside::-webkit-scrollbar-thumb,
+  .bg-slate-900::-webkit-scrollbar-thumb {
+    background: #475569; /* slate-600 */
+    border: 2px solid #1e293b;
+  }
+
+  .dark-scrollbar::-webkit-scrollbar-thumb:hover,
+  aside::-webkit-scrollbar-thumb:hover,
+  .bg-slate-900::-webkit-scrollbar-thumb:hover {
+    background: #64748b; /* slate-500 */
+  }
+
+  /* Firefox support */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #ccc #f1f1f1;
+  }
+
+  aside, .bg-slate-900 {
+    scrollbar-color: #475569 #1e293b;
+  }
+}

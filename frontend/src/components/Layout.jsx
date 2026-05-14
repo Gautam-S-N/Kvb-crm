@@ -25,7 +25,12 @@ import {
   Moon,
   Monitor,
   UserCog,
+  ClipboardCheck,
 } from 'lucide-react';
+
+
+
+
 
 const navItems = [
   { to: '/dashboard',          icon: LayoutDashboard, label: 'Dashboard',          roles: ['ADMIN', 'EMPLOYEE'] },
@@ -34,13 +39,16 @@ const navItems = [
   { to: '/sales',              icon: ShoppingCart,    label: 'Sales',              roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/products',           icon: Package,         label: 'Products',           roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/purchase',           icon: Truck,           label: 'Purchase',           roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/inventory',          icon: Package,         label: 'Inventory',          roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/tasks',              icon: CheckSquare,     label: 'Tasks',              roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/inventory',         icon: Package,         label: 'Inventory',          roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/tasks',             icon: CheckSquare,     label: 'Tasks',              roles: ['ADMIN', 'EMPLOYEE'] },
+
   { to: '/daily-reports',      icon: BarChart2,       label: 'Daily Reports',      roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/targets',            icon: Target,          label: 'Sales Targets',      roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/todo-list',          icon: ClipboardList,   label: 'My To-Do List',      roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/employee-tracking',  icon: UserCheck,       label: 'Employee Tracking',  roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/material-requests',  icon: ClipboardCheck,  label: 'Material Requests',  roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/settings',           icon: Settings,        label: 'Settings',           roles: ['ADMIN'] },
+
   { to: '/users',              icon: UserCog,         label: 'User Management',    roles: ['ADMIN'] },
 ];
 const NAV_MODULE_KEY = {
@@ -51,11 +59,15 @@ const NAV_MODULE_KEY = {
   '/purchase':          'PURCHASE',
   '/inventory':         'INVENTORY',
   '/tasks':             'TASKS',
+
+
   '/daily-reports':     'DAILY_REPORTS',
   '/targets':           'SALES_TARGETS',
   '/todo-list':         'TODO',
   '/employee-tracking': 'EMPLOYEE_TRACKING',
+  '/material-requests': 'MATERIAL_REQUESTS',
 };
+
 
 // Dark mode helpers
 const applyTheme = (mode) => {

@@ -20,18 +20,22 @@ const ALL_MODULES = [
   { key: 'SALES_TARGETS', label: 'Sales Targets' },
   { key: 'TODO', label: 'My To-Do List' },
   { key: 'EMPLOYEE_TRACKING', label: 'Employee Tracking' },
+  { key: 'MATERIAL_REQUESTS', label: 'Material Requests' },
 ];
+
 
 const DEFAULT_PERMISSIONS = {
   modules: {
     LEADS: false, QUOTATIONS: false, SALES: false, PRODUCTS: false,
     PURCHASE: false, INVENTORY: false, TASKS: false, DAILY_REPORTS: false,
-    SALES_TARGETS: false, TODO: false, EMPLOYEE_TRACKING: false,
+    SALES_TARGETS: false, TODO: false, EMPLOYEE_TRACKING: false, MATERIAL_REQUESTS: false,
   },
   canAssignTasks: false,
   canAssignLeads: false,
   canViewSubordinates: false,
+  canCreateMaterialRequests: false,
 };
+
 
 const Toggle = ({ checked, onChange, label, disabled }) => (
   <label className={`flex items-center justify-between gap-3 py-2.5 px-3 rounded-lg hover:bg-gray-50 transition-colors ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}>
@@ -51,9 +55,11 @@ const PermBadge = ({ label, color = 'blue' }) => {
     green: 'bg-green-100 text-green-700',
     purple: 'bg-purple-100 text-purple-700',
     orange: 'bg-orange-100 text-orange-700',
+    teal: 'bg-teal-100 text-teal-700',
   };
   return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold ${colors[color]}`}>{label}</span>;
 };
+
 
 export default function UserManagement() {
   const { user } = useAuthStore();
@@ -289,6 +295,8 @@ export default function UserManagement() {
                         {perms.canAssignTasks && <PermBadge label="Assign Tasks" color="orange" />}
                         {perms.canAssignLeads && <PermBadge label="Assign Leads" color="green" />}
                         {perms.canViewSubordinates && <PermBadge label="Team View" color="purple" />}
+                        {perms.canCreateMaterialRequests && <PermBadge label="Material Requests" color="teal" />}
+
                       </div>
                     )}
                   </td>
@@ -519,6 +527,15 @@ export default function UserManagement() {
                           onChange={v => setElevated('canViewSubordinates', v)}
                         />
                       </div>
+                      <div className="py-3">
+                        <Toggle
+                          label="📦 Material Requests — Can create and assign material request orders"
+                          checked={permissions.canCreateMaterialRequests || false}
+                          onChange={v => setElevated('canCreateMaterialRequests', v)}
+                        />
+                        <p className="text-xs text-gray-400 ml-3 -mt-1 mb-1">Without this, they can only view and action requests assigned to them.</p>
+                      </div>
+
                     </div>
                   </>
                 )}
@@ -541,6 +558,8 @@ export default function UserManagement() {
                       {lastSavedPerms.canAssignLeads && <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold text-[10px]">Assign Leads ✓</span>}
                       {lastSavedPerms.canAssignTasks && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold text-[10px]">Assign Tasks ✓</span>}
                       {lastSavedPerms.canViewSubordinates && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-semibold text-[10px]">Team View ✓</span>}
+                      {lastSavedPerms.canCreateMaterialRequests && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded font-semibold text-[10px]">Material Requests ✓</span>}
+
                       {Object.entries(lastSavedPerms.modules || {}).filter(([,v]) => v).length === 0 && !lastSavedPerms.canAssignLeads && !lastSavedPerms.canAssignTasks && !lastSavedPerms.canViewSubordinates && (
                         <span className="text-gray-500 italic">No permissions granted</span>
                       )}

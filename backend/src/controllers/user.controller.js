@@ -7,8 +7,9 @@ const USER_SELECT = {
   role: true, status: true, avatar: true, createdAt: true, lastLoginAt: true,
   managerId: true, permissions: true, delegatedManagerId: true, delegationExpiresAt: true,
   isSuperAdmin: true,
-  canAssignLeads: true, canAssignTasks: true, canViewSubordinates: true
+  canAssignLeads: true, canAssignTasks: true, canViewSubordinates: true, canCreateMaterialRequests: true
 };
+
 
 // GET /api/users/unassigned-count — admin use: employees with no manager
 exports.getUnassignedCount = async (req, res) => {
@@ -162,10 +163,12 @@ exports.updateUser = async (req, res) => {
       if (permissions !== undefined) {
         data.permissions = permissions;
         // Keep native Boolean columns in sync with the JSON blob
-        data.canAssignLeads      = Boolean(permissions.canAssignLeads);
-        data.canAssignTasks      = Boolean(permissions.canAssignTasks);
-        data.canViewSubordinates = Boolean(permissions.canViewSubordinates);
+        data.canAssignLeads               = Boolean(permissions.canAssignLeads);
+        data.canAssignTasks               = Boolean(permissions.canAssignTasks);
+        data.canViewSubordinates          = Boolean(permissions.canViewSubordinates);
+        data.canCreateMaterialRequests    = Boolean(permissions.canCreateMaterialRequests);
       }
+
       if (delegatedManagerId !== undefined) data.delegatedManagerId = delegatedManagerId;
       if (delegationExpiresAt !== undefined) data.delegationExpiresAt = delegationExpiresAt;
     }

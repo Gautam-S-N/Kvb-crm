@@ -37,6 +37,8 @@ const settingRoutes = require('./routes/setting.routes');
 const notificationRoutes = require('./routes/notification.routes');
 
 const materialRoutes = require('./routes/material.routes');
+const materialRequestRoutes = require('./routes/materialRequest.routes');
+
 
 // Initialize express
 const app = express();
@@ -72,6 +74,8 @@ app.use('/uploads', express.static('uploads'));
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/materials', materialRoutes);
+app.use('/api/material-requests', materialRequestRoutes);
+
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/vendors', vendorRoutes);

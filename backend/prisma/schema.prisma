@@ -52,9 +52,10 @@ model User {
   permissions         Json?
 
   // Extracted native columns for fast, indexable permission checks
-  canAssignLeads      Boolean  @default(false)
-  canAssignTasks      Boolean  @default(false)
-  canViewSubordinates Boolean  @default(false)
+  canAssignLeads            Boolean  @default(false)
+  canAssignTasks            Boolean  @default(false)
+  canViewSubordinates       Boolean  @default(false)
+  canCreateMaterialRequests Boolean  @default(false)
 
   // Delegated Authority (Temporary Access)
   delegatedManagerId  String?
@@ -84,6 +85,10 @@ model User {
   // RBAC Relations
   permissionAuditsTarget  UserPermissionAuditLog[] @relation("AuditTarget")
   permissionAuditsChanger UserPermissionAuditLog[] @relation("AuditChanger")
+
+  // Material Request Relations
+  createdMaterialRequests  MaterialRequest[] @relation("MReqCreator")
+  assignedMaterialRequests MaterialRequest[] @relation("MReqAssignee")
 
   @@map("users")
 }
@@ -995,3 +1000,65 @@ model ActivityLog {
 
   @@map("activity_logs")
 }
+
+// ============================================
+// MATERIAL REQUEST (Procurement Tracking)
+// ============================================
+
+enum MaterialRequestStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETE
+  INCOMPLETE
+}
+
+model MaterialRequest {
+  id              String                  @id @default(uuid())
+  title           String
+  projectName     String?
+  location        String?
+  notes           String?                 @db.Text
+  status          MaterialRequestStatus   @default(PENDING)
+
+  createdById     String
+  createdBy       User                    @relation("MReqCreator", fields: [createdById], references: [id])
+
+  assignedToId    String
+  assignedTo      User                    @relation("MReqAssignee", fields: [assignedToId], references: [id])
+
+  completedAt        DateTime?
+  completionNote     String?              @db.Text
+  completionVoiceUrl String?
+
+  failureReason   String?                 @db.Text
+  failureVoiceUrl String?
+
+  items           MaterialRequestItem[]
+
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@map("material_requests")
+}
+
+model MaterialRequestItem {
+  id                  String          @id @default(uuid())
+  materialRequestId   String
+  materialRequest     MaterialRequest @relation(fields: [materialRequestId], references: [id], onDelete: Cascade)
+
+  itemName            String
+  itemCode            String?
+  category            String?
+  unit                String          @default("Nos")
+  quantity            Decimal         @db.Decimal(15, 2)
+  notes               String?         @db.Text
+
+  isPurchased         Boolean         @default(false)
+  purchasedAt         DateTime?
+  purchaseNote        String?         @db.Text
+
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@map("material_request_items")
+}

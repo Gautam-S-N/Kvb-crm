@@ -7,13 +7,18 @@ import {
   Package, X, Calendar, MapPin, Tag, Info, CheckCircle2
 } from 'lucide-react';
 
+const DC_RAW_CATS = ['Sq. Tube', 'Flat Plate', 'Rec. Tube', 'Hardware', 'Round Tube', 'Round Rod', 'L Angle', 'C Channel'];
+
 const Inventory = () => {
   const { materials, isLoading, fetchMaterials, createMaterial, updateMaterial, deleteMaterial } = useMaterialStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState('ALL');
+  const [listView, setListView] = useState('ALL'); // ALL | DC_RAW | DRYER
+  const [catFilter, setCatFilter] = useState('ALL');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState(null);
   const [submitError, setSubmitError] = useState('');
+
 
   // Item code stock lookup state (aggregated across ALL records with the same code)
   const [stockLookup, setStockLookup] = useState(null);
@@ -141,22 +146,58 @@ const Inventory = () => {
 
   const totalStockValue = (materials || []).reduce((s, m) => s + (Number(m?.totalValue) || 0), 0);
 
+  // ── Derived filtered list based on list view + category + search ──────────
+  const viewFiltered = (materials || []).filter(m => {
+    if (listView === 'DC_RAW')  return DC_RAW_CATS.includes(m.category);
+    if (listView === 'DRYER')   return m.category === 'Dryer Component';
+    return true;
+  });
+
+  const catFiltered = viewFiltered.filter(m => {
+    if (catFilter !== 'ALL' && m.category !== catFilter) return false;
+    if (filter === 'LOW_STOCK' && !(Number(m?.balance) <= Number(m?.minQuantity) && Number(m?.balance) > 0)) return false;
+    return true;
+  });
+
+  // Available categories for the current list view
+  const availableCats = ['ALL', ...new Set(viewFiltered.map(m => m.category).filter(Boolean))];
+
+
   return (
     <Layout>
-      <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Inventory Management</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Comprehensive stock tracking based on project requirements.</p>
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Inventory Management</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Comprehensive stock tracking based on project requirements.</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleOpenModal()}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm"
+            >
+              <Plus size={18} /> Add New Material
+            </button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => handleOpenModal()}
-            className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm"
-          >
-            <Plus size={18} /> Add New Material
-          </button>
+
+        {/* List View Switcher */}
+        <div className="flex gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-xl w-fit">
+          {[
+            { key: 'ALL',     label: '📦 All Materials' },
+            { key: 'DC_RAW',  label: '🔩 DC Raw Materials (Sheet 3)' },
+            { key: 'DRYER',   label: '☀️ Dryer Components (Sheet 1)' },
+          ].map(v => (
+            <button key={v.key} onClick={() => { setListView(v.key); setCatFilter('ALL'); }}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                listView === v.key ? 'bg-white dark:bg-gray-700 shadow text-gray-900 dark:text-white' : 'text-gray-500 hover:text-gray-700'
+              }`}>
+              {v.label}
+            </button>
+          ))}
         </div>
       </div>
+
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -165,8 +206,8 @@ const Inventory = () => {
             <Package size={20} />
           </div>
           <div>
-            <p className="text-xs text-gray-500 uppercase tracking-wider">Total Items</p>
-            <p className="text-xl font-bold dark:text-white">{materials.length}</p>
+            <p className="text-xs text-gray-500 uppercase tracking-wider">Showing Items</p>
+            <p className="text-xl font-bold dark:text-white">{catFiltered.length}</p>
           </div>
         </div>
         <div className="bg-white dark:bg-gray-800 p-4 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm flex items-center gap-4">
@@ -176,7 +217,7 @@ const Inventory = () => {
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wider">Low Stock</p>
             <p className="text-xl font-bold dark:text-white">
-              {(materials || []).filter(m => Number(m?.balance || 0) <= Number(m?.minQuantity || 0) && Number(m?.balance || 0) > 0).length}
+              {catFiltered.filter(m => Number(m?.balance || 0) <= Number(m?.minQuantity || 0) && Number(m?.balance || 0) > 0).length}
             </p>
           </div>
         </div>
@@ -187,7 +228,7 @@ const Inventory = () => {
           <div>
             <p className="text-xs text-gray-500 uppercase tracking-wider">Out of Stock</p>
             <p className="text-xl font-bold dark:text-white">
-              {(materials || []).filter(m => Number(m?.balance || 0) <= 0).length}
+              {catFiltered.filter(m => Number(m?.balance || 0) <= 0).length}
             </p>
           </div>
         </div>
@@ -202,30 +243,47 @@ const Inventory = () => {
         </div>
       </div>
 
-      {/* Search and Table */}
+
+      {/* Search, Category Filter, and Table */}
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col md:flex-row gap-4 items-center">
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <input
-              type="text"
-              placeholder="Search by name, item code, location or site..."
-              className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-green-500"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+        <div className="p-4 border-b border-gray-100 dark:border-gray-700 flex flex-col gap-3">
+          <div className="flex flex-col md:flex-row gap-4 items-center">
+            <div className="relative flex-1 w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                type="text"
+                placeholder="Search by name, item code, location or site..."
+                className="w-full pl-10 pr-4 py-2 rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+            <div className="flex gap-2 w-full md:w-auto">
+              <select
+                className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+              >
+                <option value="ALL">All Stock</option>
+                <option value="LOW_STOCK">Low Stock Only</option>
+              </select>
+            </div>
           </div>
-          <div className="flex gap-2 w-full md:w-auto">
-            <select
-              className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:outline-none"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            >
-              <option value="ALL">All Stock</option>
-              <option value="LOW_STOCK">Low Stock Only</option>
-            </select>
-          </div>
+          {/* Category tabs */}
+          {availableCats.length > 2 && (
+            <div className="flex flex-wrap gap-1.5">
+              {availableCats.map(c => (
+                <button key={c} onClick={() => setCatFilter(c)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                    catFilter === c ? 'bg-green-600 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200'
+                  }`}>
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
+
 
         <div className="overflow-x-auto">
           <table className="w-full text-left">
@@ -245,16 +303,17 @@ const Inventory = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-              {isLoading && materials.length === 0 ? (
+              {isLoading && catFiltered.length === 0 ? (
                 <tr>
                   <td colSpan="11" className="px-6 py-10 text-center text-gray-500">Loading materials...</td>
                 </tr>
-              ) : materials.length === 0 ? (
+              ) : catFiltered.length === 0 ? (
                 <tr>
                   <td colSpan="11" className="px-6 py-10 text-center text-gray-500">No materials found.</td>
                 </tr>
               ) : (
-                (materials || []).map((m) => (
+                catFiltered.map((m) => (
+
                   <tr key={m?.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors text-sm">
                     <td className="px-4 py-3 text-gray-500 text-xs">
                       {m.date ? new Date(m.date).toLocaleDateString('en-IN') : '-'}
