@@ -25,10 +25,19 @@ exports.getUnassignedCount = async (req, res) => {
 
 exports.getUsers = async (req, res) => {
   try {
-    const { role } = req.query;
-    const where = role ? { role } : {};
+    const { role, search } = req.query;
+    const where = {};
+    if (role) where.role = role;
+    
+    if (search) {
+      where.OR = [
+        { firstName: { contains: search } },
+        { lastName: { contains: search } },
+        { email: { contains: search } }
+      ];
+    }
 
-    const users = await prisma.user.findMany({ where, select: USER_SELECT });
+    const users = await prisma.user.findMany({ where, select: USER_SELECT, orderBy: { firstName: 'asc' } });
     res.json({ success: true, data: users });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -288,6 +297,45 @@ exports.getPermissionAuditLogs = async (req, res) => {
     });
 
     res.json({ success: true, data: logs });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Only Admin can delete
+    if (req.user.role !== 'ADMIN') {
+      return res.status(403).json({ success: false, message: 'Access denied. Only admins can delete users.' });
+    }
+
+    // Super Admin protection
+    const targetUser = await prisma.user.findUnique({
+      where: { id },
+      select: { isSuperAdmin: true, subordinates: { select: { id: true } } }
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (targetUser.isSuperAdmin) {
+      return res.status(403).json({ success: false, message: 'The Super Admin account cannot be deleted.' });
+    }
+
+    // Check if user has subordinates
+    if (targetUser.subordinates.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'User has subordinates. Please reassign them before deleting.' 
+      });
+    }
+
+    await prisma.user.delete({ where: { id } });
+
+    res.json({ success: true, message: 'User deleted successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

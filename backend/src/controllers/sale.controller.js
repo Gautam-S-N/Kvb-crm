@@ -503,7 +503,7 @@ const buildReceiptHTML = (payment, sale) => `
 // GET /api/sales
 exports.getSales = async (req, res) => {
   try {
-    const { status, paymentStatus, customerId, search, page = 1, limit = 20 } = req.query;
+    const { status, paymentStatus, customerId, search, page = 1, limit = 100 } = req.query;
 
     const where = {};
 

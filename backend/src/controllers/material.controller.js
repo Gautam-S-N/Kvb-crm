@@ -3,7 +3,7 @@ const prisma = require('../utils/db');
 // GET /api/materials
 exports.getMaterials = async (req, res) => {
   try {
-    const { search, category, status, page = 1, limit = 100 } = req.query;
+    const { search, category, status, page = 1, limit = 99999 } = req.query;
     
     const where = {};
     if (search) {

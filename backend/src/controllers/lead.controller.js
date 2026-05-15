@@ -6,7 +6,7 @@ const { triggerRefreshForEmployee } = require('../services/achievement.service')
 // Get all leads with filters
 exports.getLeads = async (req, res) => {
   try {
-    const { status, source, assignedTo, search, page = 1, limit = 20 } = req.query;
+    const { status, source, assignedTo, search, page = 1, limit = 100 } = req.query;
     
     const where = { isArchived: false };
     

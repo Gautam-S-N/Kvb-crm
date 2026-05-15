@@ -4,7 +4,7 @@ import { useUserStore } from '../stores/userStore';
 import { useAuthStore } from '../stores/authStore';
 import {
   Users, ShieldAlert, Edit, Ban, CheckCircle, Plus, X, Shield,
-  GitBranch, Clock, History, Crown
+  GitBranch, Clock, History, Crown, Trash2, Search
 } from 'lucide-react';
 
 // All toggleable modules (Dashboard always ON, Settings/UserMgmt admin-only)
@@ -63,7 +63,7 @@ const PermBadge = ({ label, color = 'blue' }) => {
 
 export default function UserManagement() {
   const { user } = useAuthStore();
-  const { users, isLoading, fetchUsers, createUser, updateUser, transferSubordinates, fetchPermissionAuditLogs } = useUserStore();
+  const { users, isLoading, fetchUsers, createUser, updateUser, deleteUser, transferSubordinates, fetchPermissionAuditLogs } = useUserStore();
 
   // Handover modal state — shown when suspending a manager with active subordinates
   const [handoverModal, setHandoverModal] = useState(null); // { user, subordinateCount }
@@ -75,6 +75,7 @@ export default function UserManagement() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [showAudit, setShowAudit] = useState(null);
   const [filterModule, setFilterModule] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
   const [lastSavedPerms, setLastSavedPerms] = useState(null); // confirmed live permissions after save
 
   const [form, setForm] = useState({
@@ -85,7 +86,12 @@ export default function UserManagement() {
   const [delegationExpiresAt, setDelegationExpiresAt] = useState('');
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
 
-  useEffect(() => { fetchUsers(); }, []);
+  useEffect(() => { 
+    const delayDebounceFn = setTimeout(() => {
+      fetchUsers({ search: searchTerm });
+    }, 300);
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchTerm, fetchUsers]);
 
   if (user?.role !== 'ADMIN') {
     return (
@@ -172,6 +178,16 @@ export default function UserManagement() {
     }
   };
 
+  const handleDeleteUser = async (u) => {
+    if (u.isSuperAdmin) return;
+    if (!confirm(`CRITICAL: Are you sure you want to PERMANENTLY DELETE ${u.firstName} ${u.lastName}? This action cannot be undone.`)) return;
+    
+    const res = await deleteUser(u.id);
+    if (!res.success) {
+      alert(res.error || 'Failed to delete user');
+    }
+  };
+
   const handleShowAudit = async (userId) => {
     if (showAudit === userId) { setShowAudit(null); return; }
     const logs = await fetchPermissionAuditLogs(userId);
@@ -211,12 +227,24 @@ export default function UserManagement() {
           <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
           <p className="text-sm text-gray-500 mt-0.5">Manage employees, hierarchy, roles and module access</p>
         </div>
-        <button
-          onClick={() => handleOpenModal()}
-          className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors shadow"
-        >
-          <Plus size={18} /> Add Employee
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input 
+              type="text"
+              placeholder="Search by name or email..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="pl-9 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-500/20 focus:border-green-500 w-64 transition-all"
+            />
+          </div>
+          <button
+            onClick={() => handleOpenModal()}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-colors shadow"
+          >
+            <Plus size={18} /> Add Employee
+          </button>
+        </div>
       </div>
 
       {/* Filter bar */}
@@ -324,9 +352,14 @@ export default function UserManagement() {
                             <History size={15} />
                           </button>
                           {u.id !== user.id && (
-                            <button onClick={() => toggleStatus(u)} className={`p-1.5 rounded ${u.status === 'ACTIVE' ? 'text-gray-400 hover:text-red-600' : 'text-red-400 hover:text-green-600'}`} title={u.status === 'ACTIVE' ? 'Suspend' : 'Restore'}>
-                              {u.status === 'ACTIVE' ? <Ban size={15}/> : <CheckCircle size={15}/>}
-                            </button>
+                            <>
+                              <button onClick={() => toggleStatus(u)} className={`p-1.5 rounded ${u.status === 'ACTIVE' ? 'text-gray-400 hover:text-red-600' : 'text-red-400 hover:text-green-600'}`} title={u.status === 'ACTIVE' ? 'Suspend' : 'Restore'}>
+                                {u.status === 'ACTIVE' ? <Ban size={15}/> : <CheckCircle size={15}/>}
+                              </button>
+                              <button onClick={() => handleDeleteUser(u)} className="p-1.5 text-gray-400 hover:text-red-600 rounded" title="Permanently Delete">
+                                <Trash2 size={15} />
+                              </button>
+                            </>
                           )}
                         </>
                       )}

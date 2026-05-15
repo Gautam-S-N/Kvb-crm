@@ -154,14 +154,22 @@ function EmployeeCard({ stat, onExpand, expanded }) {
 function TaskRow({ task, onClick }) {
   const sc = STATUS_COLORS[task.status] || 'bg-gray-100 text-gray-500';
   const pc = PRIORITY_COLORS[task.priority] || '';
+  const isMReq = task.isMaterialRequest;
+
   return (
     <div 
-      onClick={() => onClick(task.id)}
-      className="flex items-center gap-3 py-2.5 px-4 border-b last:border-0 hover:bg-gray-50 cursor-pointer group"
+      onClick={() => onClick(task)}
+      className={`flex items-center gap-3 py-2.5 px-4 border-b last:border-0 hover:bg-gray-50 cursor-pointer group ${isMReq ? 'border-l-4 border-l-blue-400' : ''}`}
     >
-      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc} shrink-0`}>{task.status.replace('_', ' ')}</span>
-      <span className="flex-1 text-sm font-medium text-gray-800 truncate group-hover:text-emerald-700 transition-colors">{task.title}</span>
-      <span className={`text-xs font-bold ${pc} shrink-0`}>{task.priority}</span>
+      <div className="flex flex-col gap-1 shrink-0">
+        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sc} text-center`}>{task.status.replace('_', ' ')}</span>
+        {isMReq && <span className="px-2 py-0.5 rounded text-[9px] font-black bg-blue-600 text-white text-center uppercase tracking-tighter">Material</span>}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-gray-800 truncate group-hover:text-emerald-700 transition-colors">{task.title}</div>
+        {isMReq && task.description && <div className="text-[10px] text-gray-400 truncate">{task.description}</div>}
+      </div>
+      <span className={`text-xs font-bold ${pc} shrink-0`}>{isMReq ? '' : task.priority}</span>
       <span className="text-xs text-gray-400 shrink-0">{new Date(task.dueDate).toLocaleDateString('en-IN')}</span>
     </div>
   );
@@ -247,7 +255,7 @@ export default function EmployeeTracking() {
     setTasks([]);
     setLoadingTasks(true);
     try {
-      const res = await api.get(`/tasks?assignedToId=${empId}&limit=50`);
+      const res = await api.get(`/tasks?assignedToId=${empId}&limit=50&includeMaterialRequests=true`);
       setTasks(res.data.data || []);
     } catch { setTasks([]); }
     setLoadingTasks(false);
@@ -421,7 +429,8 @@ export default function EmployeeTracking() {
 
       {selectedTaskForDetail && (
         <TaskDetailModal
-          taskId={selectedTaskForDetail}
+          taskId={selectedTaskForDetail.id}
+          taskData={selectedTaskForDetail}
           onClose={() => setSelectedTaskForDetail(null)}
           onUpdate={() => {
             fetchTasks();

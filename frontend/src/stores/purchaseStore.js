@@ -7,8 +7,8 @@ export const usePurchaseStore = create((set, get) => ({
   currentPO: null,
   isLoading: false,
   error: null,
-  vendorPagination: { page: 1, limit: 20, total: 0, pages: 0 },
-  poPagination: { page: 1, limit: 20, total: 0, pages: 0 },
+  vendorPagination: { page: 1, limit: 100, total: 0, pages: 0 },
+  poPagination: { page: 1, limit: 100, total: 0, pages: 0 },
 
   // --- Vendors ---
   fetchVendors: async (params = {}) => {

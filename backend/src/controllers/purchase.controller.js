@@ -283,7 +283,7 @@ const generateDOCXBuffer = async (po) => {
 // GET /api/purchase
 exports.getPurchaseOrders = async (req, res) => {
   try {
-    const { status, vendorId, search, page = 1, limit = 20 } = req.query;
+    const { status, vendorId, search, page = 1, limit = 100 } = req.query;
     const where = {};
     if (status) where.status = status;
     if (vendorId) where.vendorId = vendorId;

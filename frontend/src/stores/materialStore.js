@@ -23,7 +23,7 @@ export const useMaterialStore = create((set, get) => ({
   materials: [],
   isLoading: false,
   error: null,
-  pagination: { page: 1, limit: 100, total: 0, pages: 1 },
+  pagination: { page: 1, limit: 99999, total: 0, pages: 1 },
 
   fetchMaterials: async (params = {}) => {
     set({ isLoading: true, error: null });

@@ -13,7 +13,6 @@ const Inventory = () => {
   const { materials, isLoading, fetchMaterials, createMaterial, updateMaterial, deleteMaterial } = useMaterialStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState('ALL');
-  const [listView, setListView] = useState('ALL'); // ALL | DC_RAW | DRYER
   const [catFilter, setCatFilter] = useState('ALL');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState(null);
@@ -146,21 +145,15 @@ const Inventory = () => {
 
   const totalStockValue = (materials || []).reduce((s, m) => s + (Number(m?.totalValue) || 0), 0);
 
-  // ── Derived filtered list based on list view + category + search ──────────
-  const viewFiltered = (materials || []).filter(m => {
-    if (listView === 'DC_RAW')  return DC_RAW_CATS.includes(m.category);
-    if (listView === 'DRYER')   return m.category === 'Dryer Component';
-    return true;
-  });
-
-  const catFiltered = viewFiltered.filter(m => {
+  // ── Derived filtered list based on category + search ──────────
+  const catFiltered = (materials || []).filter(m => {
     if (catFilter !== 'ALL' && m.category !== catFilter) return false;
     if (filter === 'LOW_STOCK' && !(Number(m?.balance) <= Number(m?.minQuantity) && Number(m?.balance) > 0)) return false;
     return true;
   });
 
-  // Available categories for the current list view
-  const availableCats = ['ALL', ...new Set(viewFiltered.map(m => m.category).filter(Boolean))];
+  // Available categories for the category pills
+  const availableCats = ['ALL', ...new Set((materials || []).map(m => m.category).filter(Boolean))];
 
 
   return (
@@ -179,22 +172,6 @@ const Inventory = () => {
               <Plus size={18} /> Add New Material
             </button>
           </div>
-        </div>
-
-        {/* List View Switcher */}
-        <div className="flex gap-2 p-1 bg-gray-100 dark:bg-gray-800 rounded-xl w-fit">
-          {[
-            { key: 'ALL',     label: '📦 All Materials' },
-            { key: 'DC_RAW',  label: '🔩 DC Raw Materials (Sheet 3)' },
-            { key: 'DRYER',   label: '☀️ Dryer Components (Sheet 1)' },
-          ].map(v => (
-            <button key={v.key} onClick={() => { setListView(v.key); setCatFilter('ALL'); }}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-                listView === v.key ? 'bg-white dark:bg-gray-700 shadow text-gray-900 dark:text-white' : 'text-gray-500 hover:text-gray-700'
-              }`}>
-              {v.label}
-            </button>
-          ))}
         </div>
       </div>
 

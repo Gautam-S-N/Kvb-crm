@@ -6,7 +6,7 @@ const generateTaskId = () => `task_${Date.now()}`;
 // GET /api/tasks
 exports.getTasks = async (req, res) => {
   try {
-    const { status, priority, assignedToId, type, search, page = 1, limit = 20 } = req.query;
+    const { status, priority, assignedToId, type, search, page = 1, limit = 100 } = req.query;
     const userId = req.user.id;
 
     let where = { isArchived: false };
@@ -77,10 +77,53 @@ exports.getTasks = async (req, res) => {
       prisma.task.count({ where })
     ]);
 
+    // If requested or if assignedToId is present (typical for tracking), include Material Requests
+    let combinedData = tasks;
+    let combinedTotal = total;
+
+    if (req.query.includeMaterialRequests === 'true' || (assignedToId && req.path.includes('/tasks') && !req.query.type)) {
+      const mreqWhere = { assignedToId: assignedToId || undefined };
+      
+      // Map task status filters to material request status
+      if (status) {
+        if (status === 'COMPLETED') mreqWhere.status = 'COMPLETE';
+        else if (status === 'PENDING') mreqWhere.status = 'PENDING';
+        else if (status === 'IN_PROGRESS') mreqWhere.status = 'IN_PROGRESS';
+        else if (status === 'CANCELLED') mreqWhere.status = 'INCOMPLETE';
+      }
+
+      const mreqs = await prisma.materialRequest.findMany({
+        where: mreqWhere,
+        include: {
+          assignedTo: { select: { id: true, firstName: true, lastName: true } },
+          createdBy:  { select: { id: true, firstName: true, lastName: true } },
+          items: true
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      const formattedMreqs = mreqs.map(m => ({
+        id: m.id,
+        title: `${m.title} (Material Request)`,
+        description: `${m.projectName || ''} ${m.location || ''} ${m.notes || ''}`.trim(),
+        status: m.status === 'COMPLETE' ? 'COMPLETED' : m.status === 'INCOMPLETE' ? 'CANCELLED' : m.status,
+        priority: 'MEDIUM',
+        dueDate: m.createdAt,
+        assignedTo: m.assignedTo,
+        createdBy: m.createdBy,
+        items: m.items, // Pass items through
+        isMaterialRequest: true,
+        type: 'TEAM'
+      }));
+
+      combinedData = [...tasks, ...formattedMreqs];
+      combinedTotal = total + formattedMreqs.length;
+    }
+
     res.json({
       success: true,
-      data: tasks,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+      data: combinedData,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total: combinedTotal, pages: Math.ceil(combinedTotal / parseInt(limit)) }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -392,13 +435,28 @@ exports.getTaskStats = async (req, res) => {
     });
 
     const stats = await Promise.all(employees.map(async (emp) => {
-      const [total, completed, overdue, pending, inProgress] = await Promise.all([
+      // Fetch Task stats
+      const [taskTotal, taskCompleted, taskOverdue, taskPending, taskInProgress] = await Promise.all([
         prisma.task.count({ where: { assignedToId: emp.id, type: 'TEAM', isArchived: false } }),
         prisma.task.count({ where: { assignedToId: emp.id, status: 'COMPLETED', type: 'TEAM', isArchived: false } }),
         prisma.task.count({ where: { assignedToId: emp.id, status: 'OVERDUE', type: 'TEAM', isArchived: false } }),
         prisma.task.count({ where: { assignedToId: emp.id, status: 'PENDING', type: 'TEAM', isArchived: false } }),
         prisma.task.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS', type: 'TEAM', isArchived: false } })
       ]);
+
+      // Fetch Material Request stats
+      const [mreqTotal, mreqCompleted, mreqPending, mreqInProgress] = await Promise.all([
+        prisma.materialRequest.count({ where: { assignedToId: emp.id } }),
+        prisma.materialRequest.count({ where: { assignedToId: emp.id, status: 'COMPLETE' } }),
+        prisma.materialRequest.count({ where: { assignedToId: emp.id, status: 'PENDING' } }),
+        prisma.materialRequest.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS' } })
+      ]);
+
+      const total = taskTotal + mreqTotal;
+      const completed = taskCompleted + mreqCompleted;
+      const overdue = taskOverdue;
+      const pending = taskPending + mreqPending;
+      const inProgress = taskInProgress + mreqInProgress;
 
       const score = total > 0 ? ((completed / total) * 100).toFixed(1) : '0.0';
 

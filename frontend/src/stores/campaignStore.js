@@ -5,7 +5,7 @@ export const useCampaignStore = create((set, get) => ({
   campaigns: [],
   isLoading: false,
   error: null,
-  pagination: { page: 1, limit: 20, total: 0, pages: 0 },
+  pagination: { page: 1, limit: 100, total: 0, pages: 0 },
 
   fetchCampaigns: async (params = {}) => {
     set({ isLoading: true, error: null });

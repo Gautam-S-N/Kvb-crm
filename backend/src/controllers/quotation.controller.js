@@ -60,7 +60,7 @@ const getLogoBase64 = () => {
 // Get all quotations
 exports.getQuotations = async (req, res) => {
   try {
-    const { leadId, status, search, page = 1, limit = 20 } = req.query;
+    const { leadId, status, search, page = 1, limit = 100 } = req.query;
     const where = {};
     if (leadId) where.leadId = leadId;
     if (status) where.status = status;

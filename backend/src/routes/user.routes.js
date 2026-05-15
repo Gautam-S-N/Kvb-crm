@@ -21,5 +21,6 @@ router.get('/:id', userController.getUserById);
 router.put('/:id', userController.updateUser);
 router.post('/:id/transfer-subordinates', authorize('ADMIN'), userController.transferSubordinates);
 router.get('/:id/audit', userController.getPermissionAuditLogs);
+router.delete('/:id', authorize('ADMIN'), userController.deleteUser);
 
 module.exports = router;

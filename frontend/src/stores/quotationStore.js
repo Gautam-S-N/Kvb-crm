@@ -8,7 +8,7 @@ export const useQuotationStore = create((set, get) => ({
   counters: [],
   isLoading: false,
   error: null,
-  pagination: { page: 1, limit: 20, total: 0, pages: 0 },
+  pagination: { page: 1, limit: 100, total: 0, pages: 0 },
 
   fetchQuotations: async (params = {}) => {
     set({ isLoading: true, error: null });

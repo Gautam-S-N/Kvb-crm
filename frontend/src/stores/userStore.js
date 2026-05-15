@@ -6,10 +6,11 @@ export const useUserStore = create((set, get) => ({
   isLoading: false,
   error: null,
 
-  fetchUsers: async () => {
+  fetchUsers: async (params = {}) => {
     set({ isLoading: true, error: null });
     try {
-      const res = await api.get('/users');
+      const query = new URLSearchParams(params).toString();
+      const res = await api.get(`/users?${query}`);
       set({ users: res.data.data, isLoading: false });
     } catch (err) {
       set({ error: err.response?.data?.message || 'Failed to fetch users', isLoading: false });
@@ -72,6 +73,21 @@ export const useUserStore = create((set, get) => ({
       return res.data.data || [];
     } catch (err) {
       return [];
+    }
+  },
+
+  deleteUser: async (id) => {
+    set({ isLoading: true, error: null });
+    try {
+      await api.delete(`/users/${id}`);
+      set(state => ({
+        users: state.users.filter(u => u.id !== id),
+        isLoading: false
+      }));
+      return { success: true };
+    } catch (err) {
+      set({ error: err.response?.data?.message, isLoading: false });
+      return { success: false, error: err.response?.data?.message };
     }
   },
 

@@ -23,7 +23,7 @@ const PRIORITY_COLORS = {
   URGENT: 'text-red-600',
 };
 
-export default function TaskDetailModal({ taskId, onClose, onUpdate }) {
+export default function TaskDetailModal({ taskId, taskData, onClose, onUpdate }) {
   const { user } = useAuthStore();
   const { tasks, updateTask, isLoading: storeLoading } = useTaskStore();
   const { users } = useUserStore();
@@ -36,19 +36,21 @@ export default function TaskDetailModal({ taskId, onClose, onUpdate }) {
   const isAdmin = user?.role === 'ADMIN';
 
   useEffect(() => {
-    const t = tasks.find(x => x.id === taskId);
+    const t = taskData || tasks.find(x => x.id === taskId);
     if (t) {
       setTask(t);
-      setFormData({
-        title: t.title,
-        description: t.description || '',
-        priority: t.priority,
-        status: t.status,
-        dueDate: new Date(t.dueDate).toISOString().slice(0, 16), // datetime-local format
-        assignedToId: t.assignedToId
-      });
+      if (!t.isMaterialRequest) {
+        setFormData({
+          title: t.title,
+          description: t.description || '',
+          priority: t.priority,
+          status: t.status,
+          dueDate: new Date(t.dueDate).toISOString().slice(0, 16),
+          assignedToId: t.assignedToId
+        });
+      }
     }
-  }, [taskId, tasks]);
+  }, [taskId, tasks, taskData]);
 
   if (!task) return null;
 
@@ -79,7 +81,7 @@ export default function TaskDetailModal({ taskId, onClose, onUpdate }) {
             <h2 className="font-bold text-gray-900 truncate max-w-[300px]">Task Details</h2>
           </div>
           <div className="flex items-center gap-2">
-            {isAdmin && !isEditing && (
+            {isAdmin && !isEditing && !task.isMaterialRequest && (
               <button onClick={() => setIsEditing(true)}
                 className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Edit Task">
                 <Edit2 size={18} />
@@ -164,18 +166,41 @@ export default function TaskDetailModal({ taskId, onClose, onUpdate }) {
                 <div className="flex flex-wrap gap-4 text-xs font-medium text-gray-500">
                   <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-50 rounded-lg">
                     <CalIcon size={14} className="text-gray-400" />
-                    <span>Due: {new Date(task.dueDate).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                    <span>{task.isMaterialRequest ? 'Created: ' : 'Due: '} {new Date(task.dueDate).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</span>
                   </div>
                   <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-50 rounded-lg">
                     <User size={14} className="text-gray-400" />
                     <span>Assigned to: {task.assignedTo?.firstName} {task.assignedTo?.lastName}</span>
                   </div>
-                  <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-50 rounded-lg">
-                    <div className={`w-2 h-2 rounded-full ${task.priority === 'URGENT' ? 'bg-red-500' : 'bg-amber-400'}`} />
-                    <span className={PRIORITY_COLORS[task.priority]}>{task.priority} Priority</span>
-                  </div>
+                  {!task.isMaterialRequest && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-50 rounded-lg">
+                      <div className={`w-2 h-2 rounded-full ${task.priority === 'URGENT' ? 'bg-red-500' : 'bg-amber-400'}`} />
+                      <span className={PRIORITY_COLORS[task.priority]}>{task.priority} Priority</span>
+                    </div>
+                  )}
+                  {task.isMaterialRequest && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-50 text-blue-700 rounded-lg font-bold">
+                      <Package size={14} />
+                      <span>Material Request</span>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {task.isMaterialRequest && (
+                <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <AlertTriangle size={20} className="text-amber-500" />
+                    <div>
+                      <div className="text-xs font-bold text-amber-800">Procurement Task</div>
+                      <div className="text-[10px] text-amber-600">This item is managed via Material Requests module.</div>
+                    </div>
+                  </div>
+                  <a href="/material-requests" className="px-3 py-1.5 bg-white border border-amber-200 rounded-lg text-[10px] font-bold text-amber-700 hover:bg-amber-100 transition-colors">
+                    Go to Module
+                  </a>
+                </div>
+              )}
 
               {/* Assignment Voice Note */}
               {task.assignmentVoiceUrl && (
@@ -188,12 +213,49 @@ export default function TaskDetailModal({ taskId, onClose, onUpdate }) {
                 </div>
               )}
 
-              {/* Description */}
+              {/* Description / Items */}
               <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">Detailed Instructions</label>
-                <div className="text-sm text-gray-700 leading-relaxed bg-white border border-gray-100 p-4 rounded-2xl shadow-sm whitespace-pre-wrap">
-                  {task.description || <span className="text-gray-300 italic">No description provided.</span>}
-                </div>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">
+                  {task.isMaterialRequest ? 'Requested Materials' : 'Detailed Instructions'}
+                </label>
+                
+                {task.isMaterialRequest ? (
+                  <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50 text-gray-500 uppercase text-[10px] font-bold">
+                          <th className="px-4 py-2 border-b">Item</th>
+                          <th className="px-4 py-2 border-b text-center">Qty</th>
+                          <th className="px-4 py-2 border-b">Category</th>
+                          <th className="px-4 py-2 border-b text-center">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {task.items?.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-2 font-medium text-gray-800">
+                              {item.itemName}
+                              {item.itemCode && <span className="block text-[10px] text-gray-400 font-mono">{item.itemCode}</span>}
+                            </td>
+                            <td className="px-4 py-2 text-center font-bold text-blue-600">{Number(item.quantity)} {item.unit}</td>
+                            <td className="px-4 py-2 text-gray-500">{item.category || '—'}</td>
+                            <td className="px-4 py-2 text-center">
+                              {item.isPurchased ? (
+                                <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[9px] font-bold">SENT</span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-400 rounded text-[9px] font-bold">PENDING</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-700 leading-relaxed bg-white border border-gray-100 p-4 rounded-2xl shadow-sm whitespace-pre-wrap">
+                    {task.description || <span className="text-gray-300 italic">No description provided.</span>}
+                  </div>
+                )}
               </div>
 
               {/* Completion Section */}

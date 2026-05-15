@@ -10,7 +10,7 @@ const canCreate = (user) =>
 // ── GET /api/material-requests ───────────────────────────────────────────────
 exports.getAll = async (req, res) => {
   try {
-    const { status, assignedToId, page = 1, limit = 50 } = req.query;
+    const { status, assignedToId, page = 1, limit = 100 } = req.query;
     const user = req.user;
     const where = {};
 
