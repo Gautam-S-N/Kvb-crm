@@ -1,77 +1,63 @@
 /**
  * counter.service.js
- * ─────────────────────────────────────────────────────────────────────────────
  * Provides atomic, collision-safe document number generation for all document
  * types in the system (Leads, Purchase Orders, etc.).
- *
- * Uses INSERT ... ON DUPLICATE KEY UPDATE for an atomic increment, which is
- * safe for concurrent requests and prevents duplicate numbers.
- *
- * The `document_counters` table is managed via raw SQL so it can be introduced
- * without requiring a full Prisma schema migration that would block existing work.
  */
 
-const prisma = require('../utils/db');
+const { db } = require('../utils/drizzle');
+const { sql } = require('drizzle-orm');
 const { v4: uuidv4 } = require('uuid');
+
+// Ensure the counter table exists once
+let tableCreated = false;
+const ensureTable = async () => {
+  if (tableCreated) return;
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS document_counters (
+      id          VARCHAR(36)  NOT NULL PRIMARY KEY,
+      type        VARCHAR(50)  NOT NULL UNIQUE,
+      counter     INT          NOT NULL DEFAULT 0,
+      updatedAt   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+  tableCreated = true;
+};
 
 /**
  * Atomically increments the counter for a given document type and returns
  * the new counter value. Thread-safe under concurrent requests.
- *
- * @param {string} type - Document type key (e.g. 'LEAD', 'PURCHASE_ORDER')
- * @returns {Promise<number>} - The new counter value
  */
 const incrementAndGet = async (type) => {
-  // Ensure the table exists (idempotent — safe to call on every request)
-  await prisma.$executeRawUnsafe(`
-    CREATE TABLE IF NOT EXISTS document_counters (
-      id          VARCHAR(36)  NOT NULL PRIMARY KEY,
-      type        VARCHAR(50)  NOT NULL UNIQUE,
-      counter     INT          NOT NULL DEFAULT 0,
-      updatedAt   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
+  await ensureTable();
+  const uuid = uuidv4();
+  await db.execute(sql`
+    INSERT INTO document_counters (id, type, counter, updatedAt)
+    VALUES (${uuid}, ${type}, 1, NOW())
+    ON DUPLICATE KEY UPDATE counter = counter + 1, updatedAt = NOW()
   `);
 
-  // Atomically upsert and increment
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO document_counters (id, type, counter, updatedAt)
-     VALUES (?, ?, 1, NOW())
-     ON DUPLICATE KEY UPDATE counter = counter + 1, updatedAt = NOW()`,
-    uuidv4(), type
-  );
+  const rows = await db.execute(sql`
+    SELECT counter FROM document_counters WHERE type = ${type}
+  `);
 
-  const [row] = await prisma.$queryRawUnsafe(
-    'SELECT counter FROM document_counters WHERE type = ?',
-    type
-  );
-
-  return Number(row.counter);
+  // Drizzle mysql2 execute returns [rows, fields] — normalize
+  const data = Array.isArray(rows) ? rows : (rows.rows || []);
+  const first = Array.isArray(data[0]) ? data[0][0] : data[0];
+  return Number(first?.counter || 0);
 };
 
 /**
- * Initialises a counter type to the provided value if it doesn't exist yet,
- * OR updates it to the provided value if the provided value is higher.
+ * Initialises or updates a counter to the provided max value.
  * Used during migration to sync counters with existing data.
- *
- * @param {string} type - Document type key
- * @param {number} currentMax - The maximum existing document number in the DB
  */
 const syncCounterToMax = async (type, currentMax) => {
-  await prisma.$executeRawUnsafe(`
-    CREATE TABLE IF NOT EXISTS document_counters (
-      id          VARCHAR(36)  NOT NULL PRIMARY KEY,
-      type        VARCHAR(50)  NOT NULL UNIQUE,
-      counter     INT          NOT NULL DEFAULT 0,
-      updatedAt   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
+  await ensureTable();
+  const uuid = uuidv4();
+  await db.execute(sql`
+    INSERT INTO document_counters (id, type, counter, updatedAt)
+    VALUES (${uuid}, ${type}, ${currentMax}, NOW())
+    ON DUPLICATE KEY UPDATE counter = GREATEST(counter, ${currentMax}), updatedAt = NOW()
   `);
-
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO document_counters (id, type, counter, updatedAt)
-     VALUES (?, ?, ?, NOW())
-     ON DUPLICATE KEY UPDATE counter = GREATEST(counter, ?), updatedAt = NOW()`,
-    uuidv4(), type, currentMax, currentMax
-  );
 };
 
 module.exports = { incrementAndGet, syncCounterToMax };

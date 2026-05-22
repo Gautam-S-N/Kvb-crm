@@ -1,4 +1,6 @@
-const prisma = require('../utils/db');
+const { eq, and, desc, sql, like } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 
 // GET /api/logs  — admin only
 exports.getActivityLogs = async (req, res) => {
@@ -6,39 +8,101 @@ exports.getActivityLogs = async (req, res) => {
     const { page = 1, limit = 50, action, userId } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const where = {};
-    if (action) where.action = { contains: action, mode: 'insensitive' };
-    if (userId) where.performedBy = userId;
+    const whereClause = and(
+      action ? like(schema.activityLogs.action, `%${action}%`) : undefined,
+      userId ? eq(schema.activityLogs.performedBy, userId) : undefined
+    );
 
-    // Try ActivityLog model; gracefully fall back if not available
     let logs = [];
     let total = 0;
+    
     try {
-      [logs, total] = await Promise.all([
-        prisma.activityLog.findMany({
-          where,
-          include: {
-            user: { select: { firstName: true, lastName: true, email: true, role: true } }
-          },
-          orderBy: { createdAt: 'desc' },
-          skip,
-          take: parseInt(limit)
-        }),
-        prisma.activityLog.count({ where })
+      const [rawLogs, countResult] = await Promise.all([
+        db.select({
+          id: schema.activityLogs.id,
+          action: schema.activityLogs.action,
+          entityType: schema.activityLogs.entityType,
+          entityId: schema.activityLogs.entityId,
+          description: schema.activityLogs.description,
+          metadata: schema.activityLogs.metadata,
+          performedBy: schema.activityLogs.performedBy,
+          createdAt: schema.activityLogs.createdAt,
+          userFirstName: schema.users.firstName,
+          userLastName: schema.users.lastName,
+          userEmail: schema.users.email,
+          userRole: schema.users.role,
+        })
+        .from(schema.activityLogs)
+        .leftJoin(schema.users, eq(schema.activityLogs.performedBy, schema.users.id))
+        .where(whereClause)
+        .orderBy(desc(schema.activityLogs.createdAt))
+        .limit(parseInt(limit))
+        .offset(skip),
+        
+        db.select({ count: sql`count(*)` })
+          .from(schema.activityLogs)
+          .where(whereClause)
       ]);
+
+      logs = rawLogs.map(log => ({
+        id: log.id,
+        action: log.action,
+        entityType: log.entityType,
+        entityId: log.entityId,
+        description: log.description,
+        metadata: log.metadata,
+        performedBy: log.performedBy,
+        createdAt: log.createdAt,
+        user: log.userFirstName ? {
+          firstName: log.userFirstName,
+          lastName: log.userLastName,
+          email: log.userEmail,
+          role: log.userRole,
+        } : null
+      }));
+      
+      total = countResult[0].count;
     } catch (_) {
-      // If ActivityLog model doesn't exist, return Lead Timeline as audit proxy
-      [logs, total] = await Promise.all([
-        prisma.leadTimeline.findMany({
-          include: {
-            user: { select: { firstName: true, lastName: true, email: true, role: true } }
-          },
-          orderBy: { createdAt: 'desc' },
-          skip,
-          take: parseInt(limit)
-        }),
-        prisma.leadTimeline.count()
+      // Fallback: If activityLogs fails, use leadTimeline as proxy audit
+      const [rawTimeline, countResult] = await Promise.all([
+        db.select({
+          id: schema.leadTimeline.id,
+          leadId: schema.leadTimeline.leadId,
+          action: schema.leadTimeline.action,
+          description: schema.leadTimeline.description,
+          performedBy: schema.leadTimeline.performedBy,
+          createdAt: schema.leadTimeline.createdAt,
+          userFirstName: schema.users.firstName,
+          userLastName: schema.users.lastName,
+          userEmail: schema.users.email,
+          userRole: schema.users.role,
+        })
+        .from(schema.leadTimeline)
+        .leftJoin(schema.users, eq(schema.leadTimeline.performedBy, schema.users.id))
+        .orderBy(desc(schema.leadTimeline.createdAt))
+        .limit(parseInt(limit))
+        .offset(skip),
+        
+        db.select({ count: sql`count(*)` })
+          .from(schema.leadTimeline)
       ]);
+
+      logs = rawTimeline.map(log => ({
+        id: log.id,
+        leadId: log.leadId,
+        action: log.action,
+        description: log.description,
+        performedBy: log.performedBy,
+        createdAt: log.createdAt,
+        user: log.userFirstName ? {
+          firstName: log.userFirstName,
+          lastName: log.userLastName,
+          email: log.userEmail,
+          role: log.userRole,
+        } : null
+      }));
+
+      total = countResult[0].count;
     }
 
     res.json({

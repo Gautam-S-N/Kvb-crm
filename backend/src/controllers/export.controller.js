@@ -1,6 +1,9 @@
-const prisma = require('../utils/db');
+const { eq, and, inArray, sql } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const { Parser } = require('json2csv');
 const { getSubordinateIds } = require('../middleware/permission.middleware');
+const { randomUUID } = require('crypto');
 
 /**
  * export.controller.js
@@ -14,7 +17,7 @@ const { getSubordinateIds } = require('../middleware/permission.middleware');
 // ── Internal helper: write an audit log entry for every export ──────────────
 const logExportAudit = async (userId, exportType, rowCount) => {
   try {
-    await prisma.$executeRawUnsafe(`
+    await db.execute(sql`
       CREATE TABLE IF NOT EXISTS export_audit_logs (
         id          VARCHAR(36)  NOT NULL PRIMARY KEY,
         userId      VARCHAR(36)  NOT NULL,
@@ -23,10 +26,10 @@ const logExportAudit = async (userId, exportType, rowCount) => {
         exportedAt  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO export_audit_logs (id, userId, exportType, rowCount, exportedAt) VALUES (?, ?, ?, ?, NOW())`,
-      require('uuid').v4(), userId, exportType, rowCount
-    );
+    await db.execute(sql`
+      INSERT INTO export_audit_logs (id, userId, exportType, rowCount, exportedAt)
+      VALUES (${randomUUID()}, ${userId}, ${exportType}, ${rowCount}, NOW())
+    `);
   } catch (_) {
     // Audit failure must never block the actual export — log silently
     console.error('[ExportAudit] Failed to write audit log:', _.message);
@@ -50,20 +53,43 @@ exports.exportData = async (req, res) => {
     // ── Scoped query per export type ─────────────────────────────────────────
     switch (type) {
       case 'leads': {
-        const where = { isArchived: false };
+        const leadConds = [eq(schema.leads.isArchived, false)];
         if (role !== 'ADMIN') {
-          where.assignedToId = { in: visibleUserIds };
+          leadConds.push(inArray(schema.leads.assignedToId, visibleUserIds));
         }
-        data = await prisma.lead.findMany({
-          where,
-          select: {
-            id: true, leadNumber: true, title: true, status: true,
-            source: true, estimateAmount: true,
-            customer: { select: { contactName: true, phone: true } },
-            assignedTo: { select: { firstName: true, lastName: true } },
-            createdAt: true
-          }
-        });
+
+        const leadsRaw = await db.select({
+          id: schema.leads.id,
+          leadNumber: schema.leads.leadNumber,
+          title: schema.leads.title,
+          status: schema.leads.status,
+          source: schema.leads.source,
+          estimateAmount: schema.leads.estimateAmount,
+          customerContactName: schema.customers.contactName,
+          customerPhone: schema.customers.phone,
+          assignedToFirstName: schema.users.firstName,
+          assignedToLastName: schema.users.lastName,
+          createdAt: schema.leads.createdAt
+        })
+        .from(schema.leads)
+        .leftJoin(schema.customers, eq(schema.leads.customerId, schema.customers.id))
+        .leftJoin(schema.users, eq(schema.leads.assignedToId, schema.users.id))
+        .where(and(...leadConds));
+
+        data = leadsRaw.map(l => ({
+          id: l.id,
+          leadNumber: l.leadNumber,
+          title: l.title,
+          status: l.status,
+          source: l.source,
+          estimateAmount: l.estimateAmount,
+          'customer.contactName': l.customerContactName || '',
+          'customer.phone': l.customerPhone || '',
+          'assignedTo.firstName': l.assignedToFirstName || '',
+          'assignedTo.lastName': l.assignedToLastName || '',
+          createdAt: l.createdAt
+        }));
+
         fields = [
           'id', 'leadNumber', 'title', 'status', 'source', 'estimateAmount',
           'customer.contactName', 'customer.phone',
@@ -73,19 +99,39 @@ exports.exportData = async (req, res) => {
       }
 
       case 'sales': {
-        const where = {};
+        const saleConds = [];
         if (role !== 'ADMIN') {
-          where.createdById = { in: visibleUserIds };
+          saleConds.push(inArray(schema.sales.createdById, visibleUserIds));
         }
-        data = await prisma.sale.findMany({
-          where,
-          select: {
-            id: true, saleNumber: true, totalAmount: true, status: true,
-            paymentStatus: true, saleDate: true,
-            customer: { select: { contactName: true } },
-            createdBy: { select: { firstName: true, lastName: true } }
-          }
-        });
+
+        const salesRaw = await db.select({
+          id: schema.sales.id,
+          saleNumber: schema.sales.saleNumber,
+          totalAmount: schema.sales.totalAmount,
+          status: schema.sales.status,
+          paymentStatus: schema.sales.paymentStatus,
+          saleDate: schema.sales.saleDate,
+          customerContactName: schema.customers.contactName,
+          createdByFirstName: schema.users.firstName,
+          createdByLastName: schema.users.lastName
+        })
+        .from(schema.sales)
+        .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+        .leftJoin(schema.users, eq(schema.sales.createdById, schema.users.id))
+        .where(saleConds.length > 0 ? and(...saleConds) : undefined);
+
+        data = salesRaw.map(s => ({
+          id: s.id,
+          saleNumber: s.saleNumber,
+          totalAmount: s.totalAmount,
+          status: s.status,
+          paymentStatus: s.paymentStatus,
+          'customer.contactName': s.customerContactName || '',
+          'createdBy.firstName': s.createdByFirstName || '',
+          'createdBy.lastName': s.createdByLastName || '',
+          saleDate: s.saleDate
+        }));
+
         fields = [
           'id', 'saleNumber', 'totalAmount', 'status', 'paymentStatus',
           'customer.contactName', 'createdBy.firstName', 'createdBy.lastName', 'saleDate'
@@ -101,13 +147,27 @@ exports.exportData = async (req, res) => {
             message: 'Purchase order exports are restricted to Admins only.'
           });
         }
-        data = await prisma.purchaseOrder.findMany({
-          select: {
-            id: true, poNumber: true, totalAmount: true, status: true,
-            vendor: { select: { companyName: true } },
-            orderDate: true
-          }
-        });
+
+        const purchasesRaw = await db.select({
+          id: schema.purchaseOrders.id,
+          poNumber: schema.purchaseOrders.poNumber,
+          totalAmount: schema.purchaseOrders.totalAmount,
+          status: schema.purchaseOrders.status,
+          vendorCompanyName: schema.vendors.companyName,
+          orderDate: schema.purchaseOrders.orderDate
+        })
+        .from(schema.purchaseOrders)
+        .leftJoin(schema.vendors, eq(schema.purchaseOrders.vendorId, schema.vendors.id));
+
+        data = purchasesRaw.map(p => ({
+          id: p.id,
+          poNumber: p.poNumber,
+          'vendor.companyName': p.vendorCompanyName || '',
+          totalAmount: p.totalAmount,
+          status: p.status,
+          orderDate: p.orderDate
+        }));
+
         fields = ['id', 'poNumber', 'vendor.companyName', 'totalAmount', 'status', 'orderDate'];
         break;
       }
@@ -130,14 +190,15 @@ exports.exportData = async (req, res) => {
     if (role !== 'ADMIN') {
       const io = req.app.get('io');
       if (io) {
-        const user = await prisma.user.findUnique({
-          where: { id: userId },
-          select: { firstName: true, lastName: true }
-        });
+        const userList = await db.select({ firstName: schema.users.firstName, lastName: schema.users.lastName })
+          .from(schema.users)
+          .where(eq(schema.users.id, userId))
+          .limit(1);
+        const user = userList[0];
         io.emit('notification', {
           type: 'DATA_EXPORT',
           title: 'Data Export Performed',
-          body: `${user?.firstName} ${user?.lastName} exported ${data.length} ${type} records.`,
+          body: `${user?.firstName || ''} ${user?.lastName || ''} exported ${data.length} ${type} records.`,
           targetRole: 'ADMIN'
         });
       }

@@ -1,23 +1,22 @@
-const prisma = require('../utils/db');
+const { eq, and, or, like, isNull, inArray, sql, desc } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const bcrypt = require('bcrypt');
-
-// Fields always returned when selecting a user
-const USER_SELECT = {
-  id: true, email: true, firstName: true, lastName: true, phone: true,
-  role: true, status: true, avatar: true, createdAt: true, lastLoginAt: true,
-  managerId: true, permissions: true, delegatedManagerId: true, delegationExpiresAt: true,
-  isSuperAdmin: true,
-  canAssignLeads: true, canAssignTasks: true, canViewSubordinates: true, canCreateMaterialRequests: true
-};
-
+const { randomUUID } = require('crypto');
 
 // GET /api/users/unassigned-count — admin use: employees with no manager
 exports.getUnassignedCount = async (req, res) => {
   try {
-    const count = await prisma.user.count({
-      where: { role: 'EMPLOYEE', status: 'ACTIVE', managerId: null }
-    });
-    res.json({ success: true, count });
+    const countResult = await db.select({ count: sql`count(*)` })
+      .from(schema.users)
+      .where(
+        and(
+          eq(schema.users.role, 'EMPLOYEE'),
+          eq(schema.users.status, 'ACTIVE'),
+          isNull(schema.users.managerId)
+        )
+      );
+    res.json({ success: true, count: countResult[0].count });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -26,18 +25,47 @@ exports.getUnassignedCount = async (req, res) => {
 exports.getUsers = async (req, res) => {
   try {
     const { role, search } = req.query;
-    const where = {};
-    if (role) where.role = role;
+    
+    const conditions = [];
+    if (role) {
+      conditions.push(eq(schema.users.role, role));
+    }
     
     if (search) {
-      where.OR = [
-        { firstName: { contains: search } },
-        { lastName: { contains: search } },
-        { email: { contains: search } }
-      ];
+      conditions.push(
+        or(
+          like(schema.users.firstName, `%${search}%`),
+          like(schema.users.lastName, `%${search}%`),
+          like(schema.users.email, `%${search}%`)
+        )
+      );
     }
 
-    const users = await prisma.user.findMany({ where, select: USER_SELECT, orderBy: { firstName: 'asc' } });
+    const users = await db.select({
+      id: schema.users.id,
+      email: schema.users.email,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName,
+      phone: schema.users.phone,
+      role: schema.users.role,
+      status: schema.users.status,
+      avatar: schema.users.avatar,
+      createdAt: schema.users.createdAt,
+      lastLoginAt: schema.users.lastLoginAt,
+      managerId: schema.users.managerId,
+      permissions: schema.users.permissions,
+      delegatedManagerId: schema.users.delegatedManagerId,
+      delegationExpiresAt: schema.users.delegationExpiresAt,
+      isSuperAdmin: schema.users.isSuperAdmin,
+      canAssignLeads: schema.users.canAssignLeads,
+      canAssignTasks: schema.users.canAssignTasks,
+      canViewSubordinates: schema.users.canViewSubordinates,
+      canCreateMaterialRequests: schema.users.canCreateMaterialRequests
+    })
+    .from(schema.users)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(schema.users.firstName);
+
     res.json({ success: true, data: users });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -51,14 +79,27 @@ exports.getSubordinateUsers = async (req, res) => {
     let validIds = await getSubordinateIds(req.user.id, true);
 
     if (req.user.role === 'ADMIN') {
-      const allUsers = await prisma.user.findMany({ select: { id: true } });
+      const allUsers = await db.select({ id: schema.users.id }).from(schema.users);
       validIds = allUsers.map(u => u.id).filter(id => id !== req.user.id);
     }
 
-    const users = await prisma.user.findMany({
-      where: { id: { in: validIds }, status: 'ACTIVE' },
-      select: { id: true, email: true, firstName: true, lastName: true, role: true }
-    });
+    let users = [];
+    if (validIds.length > 0) {
+      users = await db.select({
+        id: schema.users.id,
+        email: schema.users.email,
+        firstName: schema.users.firstName,
+        lastName: schema.users.lastName,
+        role: schema.users.role
+      })
+      .from(schema.users)
+      .where(
+        and(
+          inArray(schema.users.id, validIds),
+          eq(schema.users.status, 'ACTIVE')
+        )
+      );
+    }
 
     res.json({ success: true, data: users });
   } catch (error) {
@@ -73,10 +114,36 @@ exports.getUserById = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const user = await prisma.user.findUnique({ where: { id }, select: USER_SELECT });
+    const usersList = await db.select({
+      id: schema.users.id,
+      email: schema.users.email,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName,
+      phone: schema.users.phone,
+      role: schema.users.role,
+      status: schema.users.status,
+      avatar: schema.users.avatar,
+      createdAt: schema.users.createdAt,
+      lastLoginAt: schema.users.lastLoginAt,
+      managerId: schema.users.managerId,
+      permissions: schema.users.permissions,
+      delegatedManagerId: schema.users.delegatedManagerId,
+      delegationExpiresAt: schema.users.delegationExpiresAt,
+      isSuperAdmin: schema.users.isSuperAdmin,
+      canAssignLeads: schema.users.canAssignLeads,
+      canAssignTasks: schema.users.canAssignTasks,
+      canViewSubordinates: schema.users.canViewSubordinates,
+      canCreateMaterialRequests: schema.users.canCreateMaterialRequests
+    })
+    .from(schema.users)
+    .where(eq(schema.users.id, id))
+    .limit(1);
 
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    res.json({ success: true, data: user });
+    if (usersList.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    res.json({ success: true, data: usersList[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -86,31 +153,76 @@ exports.createUser = async (req, res) => {
   try {
     const { email, password, firstName, lastName, phone, role, managerId } = req.body;
 
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) return res.status(400).json({ success: false, message: 'Email already exists' });
+    const existingList = await db.select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
+
+    if (existingList.length > 0) {
+      return res.status(400).json({ success: false, message: 'Email already exists' });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Build hierarchyPath: parent's path + new user's id
     let hierarchyPath = null;
     if (managerId) {
-      const manager = await prisma.user.findUnique({ where: { id: managerId }, select: { hierarchyPath: true } });
-      hierarchyPath = (manager?.hierarchyPath || `/${managerId}/`) + `{PLACEHOLDER}/`;
+      const managerList = await db.select({ hierarchyPath: schema.users.hierarchyPath })
+        .from(schema.users)
+        .where(eq(schema.users.id, managerId))
+        .limit(1);
+
+      hierarchyPath = (managerList[0]?.hierarchyPath || `/${managerId}/`) + `{PLACEHOLDER}/`;
     }
 
-    const user = await prisma.user.create({
-      data: { email, password: hashedPassword, firstName, lastName, phone, role: role || 'EMPLOYEE', managerId: managerId || null },
-      select: { id: true, email: true, firstName: true, lastName: true, role: true, status: true, isSuperAdmin: true }
-    });
+    const id = randomUUID();
+    const newUser = {
+      id,
+      email,
+      password: hashedPassword,
+      firstName,
+      lastName,
+      phone: phone || null,
+      role: role || 'EMPLOYEE',
+      managerId: managerId || null,
+      hierarchyPath,
+      status: 'ACTIVE',
+      isSuperAdmin: false,
+      canAssignLeads: false,
+      canAssignTasks: false,
+      canViewSubordinates: false,
+      canCreateMaterialRequests: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
-    // Now update with real ID in the path
+    await db.insert(schema.users).values(newUser);
+
     if (managerId) {
-      const manager = await prisma.user.findUnique({ where: { id: managerId }, select: { hierarchyPath: true } });
-      const finalPath = (manager?.hierarchyPath || `/${managerId}/`) + `${user.id}/`;
-      await prisma.user.update({ where: { id: user.id }, data: { hierarchyPath: finalPath } });
+      const managerList = await db.select({ hierarchyPath: schema.users.hierarchyPath })
+        .from(schema.users)
+        .where(eq(schema.users.id, managerId))
+        .limit(1);
+
+      const finalPath = (managerList[0]?.hierarchyPath || `/${managerId}/`) + `${id}/`;
+      
+      await db.update(schema.users)
+        .set({ hierarchyPath: finalPath })
+        .where(eq(schema.users.id, id));
+      
+      newUser.hierarchyPath = finalPath;
     }
 
-    res.status(201).json({ success: true, data: user });
+    const userResponse = {
+      id: newUser.id,
+      email: newUser.email,
+      firstName: newUser.firstName,
+      lastName: newUser.lastName,
+      role: newUser.role,
+      status: newUser.status,
+      isSuperAdmin: newUser.isSuperAdmin
+    };
+
+    res.status(201).json({ success: true, data: userResponse });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -125,13 +237,18 @@ exports.updateUser = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    // ── Super Admin guard ──────────────────────────────────────────────────
-    const targetUser = await prisma.user.findUnique({
-      where: { id },
-      select: { permissions: true, isSuperAdmin: true, role: true, status: true }
-    });
+    const targetList = await db.select()
+      .from(schema.users)
+      .where(eq(schema.users.id, id))
+      .limit(1);
 
-    if (targetUser?.isSuperAdmin) {
+    if (targetList.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const targetUser = targetList[0];
+
+    if (targetUser.isSuperAdmin) {
       if (status && status !== 'ACTIVE') {
         return res.status(403).json({
           success: false,
@@ -146,12 +263,17 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    // ── Manager Suspension Handover guard ─────────────────────────────────
-    // If suspending a user who is currently ACTIVE, check for active subordinates
-    if (req.user.role === 'ADMIN' && status === 'SUSPENDED' && targetUser?.status === 'ACTIVE') {
-      const activeSubordinateCount = await prisma.user.count({
-        where: { managerId: id, status: 'ACTIVE' }
-      });
+    if (req.user.role === 'ADMIN' && status === 'SUSPENDED' && targetUser.status === 'ACTIVE') {
+      const subordinateCountResult = await db.select({ count: sql`count(*)` })
+        .from(schema.users)
+        .where(
+          and(
+            eq(schema.users.managerId, id),
+            eq(schema.users.status, 'ACTIVE')
+          )
+        );
+      
+      const activeSubordinateCount = subordinateCountResult[0].count;
       if (activeSubordinateCount > 0) {
         return res.status(409).json({
           success: false,
@@ -161,9 +283,13 @@ exports.updateUser = async (req, res) => {
         });
       }
     }
-    // ──────────────────────────────────────────────────────────────────────
 
-    const data = { firstName, lastName, phone };
+    const data = {
+      firstName: firstName !== undefined ? firstName : targetUser.firstName,
+      lastName: lastName !== undefined ? lastName : targetUser.lastName,
+      phone: phone !== undefined ? phone : targetUser.phone,
+      updatedAt: new Date()
+    };
 
     if (req.user.role === 'ADMIN') {
       if (role) data.role = role;
@@ -171,7 +297,6 @@ exports.updateUser = async (req, res) => {
       if (managerId !== undefined) data.managerId = managerId;
       if (permissions !== undefined) {
         data.permissions = permissions;
-        // Keep native Boolean columns in sync with the JSON blob
         data.canAssignLeads               = Boolean(permissions.canAssignLeads);
         data.canAssignTasks               = Boolean(permissions.canAssignTasks);
         data.canViewSubordinates          = Boolean(permissions.canViewSubordinates);
@@ -179,58 +304,62 @@ exports.updateUser = async (req, res) => {
       }
 
       if (delegatedManagerId !== undefined) data.delegatedManagerId = delegatedManagerId;
-      if (delegationExpiresAt !== undefined) data.delegationExpiresAt = delegationExpiresAt;
+      if (delegationExpiresAt !== undefined) data.delegationExpiresAt = delegationExpiresAt ? new Date(delegationExpiresAt) : null;
     }
 
     if (password) {
       data.password = await bcrypt.hash(password, 10);
     }
-    // ── Recompute hierarchyPath when managerId changes ────────────────────
+
     if (req.user.role === 'ADMIN' && managerId !== undefined) {
       let newPath = null;
       if (managerId) {
-        const mgr = await prisma.user.findUnique({ where: { id: managerId }, select: { hierarchyPath: true } });
-        newPath = (mgr?.hierarchyPath || `/${managerId}/`) + `${id}/`;
+        const mgrList = await db.select({ hierarchyPath: schema.users.hierarchyPath })
+          .from(schema.users)
+          .where(eq(schema.users.id, managerId))
+          .limit(1);
+
+        newPath = (mgrList[0]?.hierarchyPath || `/${managerId}/`) + `${id}/`;
       }
-      await prisma.user.update({ where: { id }, data: { hierarchyPath: newPath } });
+      data.hierarchyPath = newPath;
 
       // Cascade: update all subordinates whose path contained the old path segment
-      const oldSubordinates = await prisma.user.findMany({
-        where: { hierarchyPath: { contains: `/${id}/` } },
-        select: { id: true, hierarchyPath: true }
-      });
+      const oldSubordinates = await db.select()
+        .from(schema.users)
+        .where(like(schema.users.hierarchyPath, `%/${id}/%`));
+      
       for (const sub of oldSubordinates) {
         const pathAfterUser = sub.hierarchyPath.split(`/${id}/`)[1] || '';
-        await prisma.user.update({
-          where: { id: sub.id },
-          data: { hierarchyPath: (newPath || `/${id}/`) + pathAfterUser }
-        });
+        await db.update(schema.users)
+          .set({ hierarchyPath: (newPath || `/${id}/`) + pathAfterUser, updatedAt: new Date() })
+          .where(eq(schema.users.id, sub.id));
       }
     }
-    // ──────────────────────────────────────────────────────────────────────
 
-    const user = await prisma.user.update({
-      where: { id },
-      data,
-      select: { ...USER_SELECT }
-    });
+    await db.update(schema.users)
+      .set(data)
+      .where(eq(schema.users.id, id));
 
-    // ── Audit log if permissions changed ──────────────────────────────────
+    const updatedUser = {
+      ...targetUser,
+      ...data
+    };
+
     if (req.user.role === 'ADMIN' && permissions !== undefined) {
       const prevPerms = targetUser.permissions ? JSON.stringify(targetUser.permissions) : '{}';
       const newPerms = JSON.stringify(permissions);
 
       if (prevPerms !== newPerms) {
-        await prisma.userPermissionAuditLog.create({
-          data: {
-            targetUserId: id,
-            changedById: req.user.id,
-            previousState: targetUser.permissions || {},
-            newState: permissions
-          }
+        const auditLogId = randomUUID();
+        await db.insert(schema.userPermissionAuditLogs).values({
+          id: auditLogId,
+          targetUserId: id,
+          changedById: req.user.id,
+          previousState: targetUser.permissions || {},
+          newState: permissions,
+          timestamp: new Date()
         });
 
-        // ── Real-time permission push via Socket.IO ───────────────────────
         const io = req.app.get('io');
         if (io) {
           io.to(id).emit('permission_updated', {
@@ -242,43 +371,67 @@ exports.updateUser = async (req, res) => {
       }
     }
 
-    res.json({ success: true, data: user });
+    const { password: _, ...userWithoutPassword } = updatedUser;
+
+    res.json({ success: true, data: userWithoutPassword });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// POST /api/users/:id/transfer-subordinates
-// Bulk-reassigns all active subordinates of :id to a new manager (or null = unassigned)
-// Then proceeds to suspend :id automatically
+// Bulk-reassigns all active subordinates of :id to a new manager (or null = unassigned) and proceed to suspend
 exports.transferSubordinates = async (req, res) => {
   try {
     const { id } = req.params;
-    const { newManagerId } = req.body; // null = move to unassigned pool
+    const { newManagerId } = req.body;
 
     if (req.user.role !== 'ADMIN') {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    // Bulk-update all active subordinates
-    await prisma.user.updateMany({
-      where: { managerId: id, status: 'ACTIVE' },
-      data: { managerId: newManagerId || null }
-    });
+    await db.update(schema.users)
+      .set({ managerId: newManagerId || null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.users.managerId, id),
+          eq(schema.users.status, 'ACTIVE')
+        )
+      );
 
-    // Now suspend the original manager
-    const suspended = await prisma.user.update({
-      where: { id },
-      data: { status: 'SUSPENDED' },
-      select: USER_SELECT
-    });
+    await db.update(schema.users)
+      .set({ status: 'SUSPENDED', updatedAt: new Date() })
+      .where(eq(schema.users.id, id));
 
-    res.json({ success: true, message: 'Subordinates transferred and manager suspended.', data: suspended });
+    const suspendedList = await db.select({
+      id: schema.users.id,
+      email: schema.users.email,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName,
+      phone: schema.users.phone,
+      role: schema.users.role,
+      status: schema.users.status,
+      avatar: schema.users.avatar,
+      createdAt: schema.users.createdAt,
+      lastLoginAt: schema.users.lastLoginAt,
+      managerId: schema.users.managerId,
+      permissions: schema.users.permissions,
+      delegatedManagerId: schema.users.delegatedManagerId,
+      delegationExpiresAt: schema.users.delegationExpiresAt,
+      isSuperAdmin: schema.users.isSuperAdmin,
+      canAssignLeads: schema.users.canAssignLeads,
+      canAssignTasks: schema.users.canAssignTasks,
+      canViewSubordinates: schema.users.canViewSubordinates,
+      canCreateMaterialRequests: schema.users.canCreateMaterialRequests
+    })
+    .from(schema.users)
+    .where(eq(schema.users.id, id))
+    .limit(1);
+
+    res.json({ success: true, message: 'Subordinates transferred and manager suspended.', data: suspendedList[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
 
 exports.getPermissionAuditLogs = async (req, res) => {
   try {
@@ -288,13 +441,33 @@ exports.getPermissionAuditLogs = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    const logs = await prisma.userPermissionAuditLog.findMany({
-      where: { targetUserId: id },
-      include: {
-        changedBy: { select: { firstName: true, lastName: true } }
-      },
-      orderBy: { timestamp: 'desc' }
-    });
+    const rawLogs = await db.select({
+      id: schema.userPermissionAuditLogs.id,
+      targetUserId: schema.userPermissionAuditLogs.targetUserId,
+      changedById: schema.userPermissionAuditLogs.changedById,
+      previousState: schema.userPermissionAuditLogs.previousState,
+      newState: schema.userPermissionAuditLogs.newState,
+      timestamp: schema.userPermissionAuditLogs.timestamp,
+      changerFirstName: schema.users.firstName,
+      changerLastName: schema.users.lastName
+    })
+    .from(schema.userPermissionAuditLogs)
+    .leftJoin(schema.users, eq(schema.userPermissionAuditLogs.changedById, schema.users.id))
+    .where(eq(schema.userPermissionAuditLogs.targetUserId, id))
+    .orderBy(desc(schema.userPermissionAuditLogs.timestamp));
+
+    const logs = rawLogs.map(log => ({
+      id: log.id,
+      targetUserId: log.targetUserId,
+      changedById: log.changedById,
+      previousState: log.previousState,
+      newState: log.newState,
+      timestamp: log.timestamp,
+      changedBy: log.changerFirstName ? {
+        firstName: log.changerFirstName,
+        lastName: log.changerLastName
+      } : null
+    }));
 
     res.json({ success: true, data: logs });
   } catch (error) {
@@ -306,34 +479,37 @@ exports.deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Only Admin can delete
     if (req.user.role !== 'ADMIN') {
       return res.status(403).json({ success: false, message: 'Access denied. Only admins can delete users.' });
     }
 
-    // Super Admin protection
-    const targetUser = await prisma.user.findUnique({
-      where: { id },
-      select: { isSuperAdmin: true, subordinates: { select: { id: true } } }
-    });
+    const targetList = await db.select()
+      .from(schema.users)
+      .where(eq(schema.users.id, id))
+      .limit(1);
 
-    if (!targetUser) {
+    if (targetList.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+
+    const targetUser = targetList[0];
 
     if (targetUser.isSuperAdmin) {
       return res.status(403).json({ success: false, message: 'The Super Admin account cannot be deleted.' });
     }
 
-    // Check if user has subordinates
-    if (targetUser.subordinates.length > 0) {
+    const subordinateCountResult = await db.select({ count: sql`count(*)` })
+      .from(schema.users)
+      .where(eq(schema.users.managerId, id));
+
+    if (subordinateCountResult[0].count > 0) {
       return res.status(400).json({ 
         success: false, 
         message: 'User has subordinates. Please reassign them before deleting.' 
       });
     }
 
-    await prisma.user.delete({ where: { id } });
+    await db.delete(schema.users).where(eq(schema.users.id, id));
 
     res.json({ success: true, message: 'User deleted successfully' });
   } catch (error) {

@@ -1,9 +1,12 @@
-const prisma = require('../utils/db');
+const { eq, and, inArray, sql, desc, asc, like } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const ExcelJS = require('exceljs');
 const { incrementAndGet, syncCounterToMax } = require('../services/counter.service');
+const { randomUUID } = require('crypto');
 
 // Pre-load logo as base64 once at startup
 const LOGO_PATH = path.join(__dirname, '../assets/logo.jpg');
@@ -11,8 +14,7 @@ const LOGO_B64  = fs.existsSync(LOGO_PATH)
   ? `data:image/jpeg;base64,${fs.readFileSync(LOGO_PATH).toString('base64')}`
   : null;
 
-// Generates a unique, atomic PO number. Uses a dedicated counter table to
-// prevent duplicate numbers when multiple POs are created concurrently.
+// Generates a unique, atomic PO number.
 const generatePONumber = async () => {
   const now = new Date();
   const fy = now.getMonth() >= 3
@@ -20,7 +22,8 @@ const generatePONumber = async () => {
     : `${String(now.getFullYear() - 1).slice(2)}/${String(now.getFullYear()).slice(2)}`;
 
   // Sync counter to existing max on first use to avoid collisions with old data
-  const existingMax = await prisma.purchaseOrder.count();
+  const [countResult] = await db.select({ count: sql`count(*)` }).from(schema.purchaseOrders);
+  const existingMax = Number(countResult?.count || 0);
   await syncCounterToMax('PURCHASE_ORDER', existingMax);
   const counter = await incrementAndGet('PURCHASE_ORDER');
 
@@ -87,7 +90,6 @@ const buildPOHTML = (po) => {
     `<tr><td style="${TD}height:15px;"> </td><td style="${TD}"> </td><td style="${TD}"> </td><td style="${TD}"> </td><td style="${TD}"> </td><td style="${TD}"> </td></tr>`
   ).join('');
 
-  // Logo cell — embed base64 if available
   const logoCell = LOGO_B64
     ? `<td style="padding:6px 12px;width:80px;"><img src="${LOGO_B64}" style="height:60px;width:auto;object-fit:contain;"></td>`
     : `<td style="padding:6px 12px;width:80px;font-size:18px;font-weight:900;color:#1a7340;">KVB</td>`;
@@ -155,7 +157,7 @@ const buildPOHTML = (po) => {
   <thead>
     <tr>
       <th style="${TH}width:6%;">Sl.No.</th>
-      <th style="${TH}width:36%;border-left:1px solid #003f87;"> </th>
+      <th style="${TH}width:36%;border-left:1px solid #003f87;">Item Name</th>
       <th style="${TH}width:12%;border-left:1px solid #003f87;">HSN Code</th>
       <th style="${TH}width:8%;border-left:1px solid #003f87;">QTY</th>
       <th style="${TH}width:19%;border-left:1px solid #003f87;">UNIT PRICE</th>
@@ -187,7 +189,7 @@ const buildPOHTML = (po) => {
 </html>`;
 };
 
-// ── XLSX using the master template (correct cell mapping) ─────────────────────
+// ── XLSX using the master template ────────────────────────────────────────────
 const generateXLSXBuffer = async (po) => {
   const meta    = parsePoMeta(po);
   const date    = new Date(po.orderDate || po.createdAt).toLocaleDateString('en-IN');
@@ -202,34 +204,28 @@ const generateXLSXBuffer = async (po) => {
   await wb.xlsx.readFile(templatePath);
   const ws = wb.worksheets[0];
 
-  // PO No (J6) and Date (M6 merged M6:N6)
   ws.getCell('J6').value = po.poNumber;
   ws.getCell('M6').value = date;
 
-  // Vendor rows 8-12: template merges I8:J8, I9:J9, etc. — write full label+value to I
   ws.getCell('I8').value  = 'Name Of Company: ' + meta.vendorName;
   ws.getCell('I9').value  = 'GSTIN: ' + meta.vendorGstin;
   ws.getCell('I10').value = 'Address: ' + meta.vendorAddress;
   ws.getCell('I11').value = 'Pin Code: ' + meta.vendorPinCode;
   ws.getCell('I12').value = 'M No: ' + meta.vendorPhone;
 
-  // Ship To rows 8-12: template merges K8:N8, K9:N9, etc. — write to K
   ws.getCell('K8').value  = 'Name Of Company: KVB GREEN ENERGIES';
   ws.getCell('K9').value  = 'GSTIN: 29AAXFK4926A1Z0';
   ws.getCell('K10').value = 'Address: ' + meta.shipAddress;
   ws.getCell('K11').value = 'Pin Code: ' + meta.shipPinCode;
   ws.getCell('K12').value = 'M No: ' + meta.shipMNo;
 
-  // Shipping Method (K14 merged K14:L14) and Delivery Date (M14 merged M14:N14)
   ws.getCell('K14').value = meta.shippingMethod;
   ws.getCell('M14').value = delDate;
 
-  // Clear sample item rows first
   for (let r = 16; r <= 31; r++) {
     ['I', 'J', 'K', 'L', 'M', 'N'].forEach(c => { ws.getCell(`${c}${r}`).value = null; });
   }
 
-  // Write items
   po.items.forEach((item, i) => {
     const r = 16 + i;
     ws.getCell(`I${r}`).value = i + 1;
@@ -240,21 +236,17 @@ const generateXLSXBuffer = async (po) => {
     ws.getCell(`N${r}`).value = Number(item.totalPrice);
   });
 
-  // Fix percentage numFmt on N33 (GST) and N35 (GRAND TOTAL) before writing
-  // The template has 0.00% format which would turn 1800 into 180000%
   ws.getCell('N32').numFmt = '#,##0.00';
   ws.getCell('N33').numFmt = '#,##0.00';
   ws.getCell('N34').numFmt = '#,##0.00';
   ws.getCell('N35').numFmt = '#,##0.00';
 
-  // Totals — rows 32-35
   ws.getCell('N32').value = sub;
   ws.getCell('M33').value = `GST @ ${meta.gstRate} %`;
   ws.getCell('N33').value = gstAmt;
   ws.getCell('N34').value = rnd;
   ws.getCell('N35').value = grand;
 
-  // Enforce column widths to prevent ### display
   ws.getColumn('I').width = 8;
   ws.getColumn('J').width = 40;
   ws.getColumn('K').width = 11;
@@ -265,7 +257,7 @@ const generateXLSXBuffer = async (po) => {
   return await wb.xlsx.writeBuffer();
 };
 
-// ── DOCX — pass full HTML to html-to-docx ────────────────────────────────────
+// ── DOCX ──────────────────────────────────────────────────────────────────────
 const generateDOCXBuffer = async (po) => {
   const htmlToDocx = require('html-to-docx');
   const html = buildPOHTML(po);
@@ -274,41 +266,94 @@ const generateDOCXBuffer = async (po) => {
     orientation: 'portrait',
     fontSize: 20,
   });
-  // html-to-docx returns Buffer or Uint8Array depending on version
   return Buffer.isBuffer(result) ? result : Buffer.from(result);
 };
-
-// ─── Controllers ──────────────────────────────────────────────────────────────
 
 // GET /api/purchase
 exports.getPurchaseOrders = async (req, res) => {
   try {
     const { status, vendorId, search, page = 1, limit = 100 } = req.query;
-    const where = {};
-    if (status) where.status = status;
-    if (vendorId) where.vendorId = vendorId;
-    if (search) where.OR = [
-      { poNumber: { contains: search } },
-    ];
+    const conditions = [];
+    if (status) conditions.push(eq(schema.purchaseOrders.status, status));
+    if (vendorId) conditions.push(eq(schema.purchaseOrders.vendorId, vendorId));
+    if (search) {
+      conditions.push(like(schema.purchaseOrders.poNumber, `%${search}%`));
+    }
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const [orders, total] = await Promise.all([
-      prisma.purchaseOrder.findMany({
-        where,
-        include: {
-          vendor: { select: { id: true, companyName: true, contactName: true } },
-          createdBy: { select: { id: true, firstName: true, lastName: true } },
-          items: { orderBy: { id: 'asc' } },
-          _count: { select: { items: true } }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.purchaseOrder.count({ where })
+    const parsedLimit = parseInt(limit);
+
+    const [ordersRaw, countResult] = await Promise.all([
+      db.select({
+        id: schema.purchaseOrders.id,
+        poNumber: schema.purchaseOrders.poNumber,
+        status: schema.purchaseOrders.status,
+        subTotal: schema.purchaseOrders.subTotal,
+        taxAmount: schema.purchaseOrders.taxAmount,
+        totalAmount: schema.purchaseOrders.totalAmount,
+        expectedDate: schema.purchaseOrders.expectedDate,
+        receivedDate: schema.purchaseOrders.receivedDate,
+        notes: schema.purchaseOrders.notes,
+        pdfUrl: schema.purchaseOrders.pdfUrl,
+        vendorId: schema.purchaseOrders.vendorId,
+        createdById: schema.purchaseOrders.createdById,
+        createdAt: schema.purchaseOrders.createdAt,
+        updatedAt: schema.purchaseOrders.updatedAt,
+        vendorId_: schema.vendors.id,
+        vendorCompanyName: schema.vendors.companyName,
+        vendorContactName: schema.vendors.contactName,
+        createdById_: schema.users.id,
+        createdByFirstName: schema.users.firstName,
+        createdByLastName: schema.users.lastName
+      })
+      .from(schema.purchaseOrders)
+      .leftJoin(schema.vendors, eq(schema.purchaseOrders.vendorId, schema.vendors.id))
+      .leftJoin(schema.users, eq(schema.purchaseOrders.createdById, schema.users.id))
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(schema.purchaseOrders.createdAt))
+      .limit(parsedLimit)
+      .offset(skip),
+
+      db.select({ count: sql`count(*)` })
+        .from(schema.purchaseOrders)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
     ]);
+
+    const total = Number(countResult[0]?.count || 0);
+    const ordersRows = ordersRaw.map(r => ({
+      id: r.id, poNumber: r.poNumber, status: r.status, subTotal: r.subTotal,
+      taxAmount: r.taxAmount, totalAmount: r.totalAmount, expectedDate: r.expectedDate,
+      receivedDate: r.receivedDate, notes: r.notes, pdfUrl: r.pdfUrl,
+      vendorId: r.vendorId, createdById: r.createdById, createdAt: r.createdAt, updatedAt: r.updatedAt,
+      vendor: r.vendorId_ ? { id: r.vendorId_, companyName: r.vendorCompanyName, contactName: r.vendorContactName } : null,
+      createdBy: r.createdById_ ? { id: r.createdById_, firstName: r.createdByFirstName, lastName: r.createdByLastName } : null
+    }));
+
+    let itemsCountMap = {};
+    let itemsMap = {};
+    if (ordersRows.length > 0) {
+      const poIds = ordersRows.map(o => o.id);
+      
+      const items = await db.select()
+        .from(schema.purchaseOrderItems)
+        .where(inArray(schema.purchaseOrderItems.purchaseOrderId, poIds))
+        .orderBy(asc(schema.purchaseOrderItems.id));
+
+      for (const item of items) {
+        if (!itemsMap[item.purchaseOrderId]) itemsMap[item.purchaseOrderId] = [];
+        itemsMap[item.purchaseOrderId].push(item);
+        itemsCountMap[item.purchaseOrderId] = (itemsCountMap[item.purchaseOrderId] || 0) + 1;
+      }
+    }
+
+    const formatted = ordersRows.map(o => ({
+      ...o,
+      items: itemsMap[o.id] || [],
+      _count: { items: itemsCountMap[o.id] || 0 }
+    }));
+
     res.json({
       success: true,
-      data: orders,
+      data: formatted,
       pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
     });
   } catch (error) {
@@ -319,15 +364,59 @@ exports.getPurchaseOrders = async (req, res) => {
 // GET /api/purchase/:id
 exports.getPurchaseOrderById = async (req, res) => {
   try {
-    const po = await prisma.purchaseOrder.findUnique({
-      where: { id: req.params.id },
-      include: {
-        vendor: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true } },
-        items: { orderBy: { id: 'asc' } }
-      }
-    });
-    if (!po) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    const poRows = await db.select({
+      id: schema.purchaseOrders.id,
+      poNumber: schema.purchaseOrders.poNumber,
+      status: schema.purchaseOrders.status,
+      subTotal: schema.purchaseOrders.subTotal,
+      taxAmount: schema.purchaseOrders.taxAmount,
+      totalAmount: schema.purchaseOrders.totalAmount,
+      expectedDate: schema.purchaseOrders.expectedDate,
+      receivedDate: schema.purchaseOrders.receivedDate,
+      notes: schema.purchaseOrders.notes,
+      pdfUrl: schema.purchaseOrders.pdfUrl,
+      vendorId: schema.purchaseOrders.vendorId,
+      createdById: schema.purchaseOrders.createdById,
+      createdAt: schema.purchaseOrders.createdAt,
+      updatedAt: schema.purchaseOrders.updatedAt,
+      vendorId_: schema.vendors.id,
+      vendorCompanyName: schema.vendors.companyName,
+      vendorContactName: schema.vendors.contactName,
+      vendorPhone: schema.vendors.phone,
+      vendorEmail: schema.vendors.email,
+      vendorAddress: schema.vendors.address,
+      vendorCity: schema.vendors.city,
+      vendorState: schema.vendors.state,
+      vendorPinCode: schema.vendors.pinCode,
+      vendorGstNumber: schema.vendors.gstNumber,
+      createdById_: schema.users.id,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.purchaseOrders)
+    .leftJoin(schema.vendors, eq(schema.purchaseOrders.vendorId, schema.vendors.id))
+    .leftJoin(schema.users, eq(schema.purchaseOrders.createdById, schema.users.id))
+    .where(eq(schema.purchaseOrders.id, req.params.id))
+    .limit(1);
+
+    if (poRows.length === 0) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    const rawPo = poRows[0];
+    const po = {
+      id: rawPo.id, poNumber: rawPo.poNumber, status: rawPo.status, subTotal: rawPo.subTotal,
+      taxAmount: rawPo.taxAmount, totalAmount: rawPo.totalAmount, expectedDate: rawPo.expectedDate,
+      receivedDate: rawPo.receivedDate, notes: rawPo.notes, pdfUrl: rawPo.pdfUrl,
+      vendorId: rawPo.vendorId, createdById: rawPo.createdById, createdAt: rawPo.createdAt, updatedAt: rawPo.updatedAt,
+      vendor: rawPo.vendorId_ ? { id: rawPo.vendorId_, companyName: rawPo.vendorCompanyName, contactName: rawPo.vendorContactName, phone: rawPo.vendorPhone, email: rawPo.vendorEmail, address: rawPo.vendorAddress, city: rawPo.vendorCity, state: rawPo.vendorState, pinCode: rawPo.vendorPinCode, gstNumber: rawPo.vendorGstNumber } : null,
+      createdBy: rawPo.createdById_ ? { id: rawPo.createdById_, firstName: rawPo.createdByFirstName, lastName: rawPo.createdByLastName } : null
+    };
+
+    const items = await db.select()
+      .from(schema.purchaseOrderItems)
+      .where(eq(schema.purchaseOrderItems.purchaseOrderId, po.id))
+      .orderBy(asc(schema.purchaseOrderItems.id));
+
+    po.items = items;
+
     res.json({ success: true, data: po });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -353,12 +442,14 @@ exports.createPurchaseOrder = async (req, res) => {
       const total = item.quantity * item.unitPrice;
       subTotal += total;
       return {
+        id: randomUUID(),
         itemName: item.itemName,
         description: item.description || null,
         hsnCode: item.hsnCode || null,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        totalPrice: total
+        quantity: String(item.quantity),
+        unitPrice: String(item.unitPrice),
+        totalPrice: String(total),
+        materialId: item.materialId || null
       };
     });
 
@@ -383,28 +474,51 @@ exports.createPurchaseOrder = async (req, res) => {
       gstRate, roundOff: rnd,
     });
 
-    // Find-or-create hidden placeholder vendor (required FK)
-    let placeholder = await prisma.vendor.findFirst({ where: { companyName: '__MANUAL_ENTRY__' } });
+    let placeholderList = await db.select().from(schema.vendors).where(eq(schema.vendors.companyName, '__MANUAL_ENTRY__')).limit(1);
+    let placeholder = placeholderList[0];
     if (!placeholder) {
-      placeholder = await prisma.vendor.create({
-        data: { companyName: '__MANUAL_ENTRY__', contactName: 'Manual', phone: '0000000000' }
-      });
+      const newPlaceholderId = randomUUID();
+      placeholder = {
+        id: newPlaceholderId,
+        companyName: '__MANUAL_ENTRY__',
+        contactName: 'Manual',
+        phone: '0000000000',
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+      await db.insert(schema.vendors).values(placeholder);
     }
 
-    const po = await prisma.purchaseOrder.create({
-      data: {
-        poNumber,
-        createdById: req.user.id,
-        vendorId: placeholder.id,
-        subTotal, taxAmount: gstAmt, totalAmount,
-        expectedDate: expectedDate ? new Date(expectedDate) : null,
-        notes,
-        items: { create: poItems }
-      },
-      include: {
-        items: { orderBy: { id: 'asc' } },
-        createdBy: { select: { id: true, firstName: true, lastName: true } }
-      }
+    const newPoId = randomUUID();
+    const now = new Date();
+
+    const poData = {
+      id: newPoId,
+      poNumber,
+      createdById: req.user.id,
+      vendorId: placeholder.id,
+      subTotal: String(subTotal),
+      taxAmount: String(gstAmt),
+      totalAmount: String(totalAmount),
+      expectedDate: expectedDate ? new Date(expectedDate) : null,
+      notes,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const po = await db.transaction(async (tx) => {
+      await tx.insert(schema.purchaseOrders).values(poData);
+
+      const itemsWithPoId = poItems.map(i => ({
+        ...i,
+        purchaseOrderId: newPoId
+      }));
+      await tx.insert(schema.purchaseOrderItems).values(itemsWithPoId);
+
+      return {
+        ...poData,
+        items: itemsWithPoId
+      };
     });
 
     const ioRefresh = req.app.get('io');
@@ -429,13 +543,11 @@ exports.updatePurchaseOrder = async (req, res) => {
       items, expectedDate
     } = req.body;
 
-    const existingPO = await prisma.purchaseOrder.findUnique({
-      where: { id: req.params.id },
-      include: { items: { orderBy: { id: 'asc' } } }
-    });
+    const existingPOList = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, req.params.id)).limit(1);
+    const existingPO = existingPOList[0];
     if (!existingPO) return res.status(404).json({ success: false, message: 'Purchase order not found' });
 
-    let updateData = {};
+    let updateData = { updatedAt: new Date() };
     if (status) updateData.status = status;
     if (receivedDate) updateData.receivedDate = new Date(receivedDate);
 
@@ -445,12 +557,15 @@ exports.updatePurchaseOrder = async (req, res) => {
         const total = item.quantity * item.unitPrice;
         subTotal += total;
         return {
+          id: randomUUID(),
+          purchaseOrderId: existingPO.id,
           itemName: item.itemName,
           description: item.description || null,
           hsnCode: item.hsnCode || null,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          totalPrice: total
+          quantity: String(item.quantity),
+          unitPrice: String(item.unitPrice),
+          totalPrice: String(total),
+          materialId: item.materialId || null
         };
       });
 
@@ -478,31 +593,38 @@ exports.updatePurchaseOrder = async (req, res) => {
       updateData = {
         ...updateData,
         poNumber: poNumber || existingPO.poNumber,
-        subTotal, taxAmount: gstAmt, totalAmount,
+        subTotal: String(subTotal),
+        taxAmount: String(gstAmt),
+        totalAmount: String(totalAmount),
         expectedDate: expectedDate ? new Date(expectedDate) : null,
-        notes,
-        items: {
-          deleteMany: {},
-          create: poItems
-        }
+        notes
       };
-    } else if (req.body.notes !== undefined) {
-      updateData.notes = req.body.notes;
+
+      await db.transaction(async (tx) => {
+        await tx.update(schema.purchaseOrders).set(updateData).where(eq(schema.purchaseOrders.id, existingPO.id));
+        await tx.delete(schema.purchaseOrderItems).where(eq(schema.purchaseOrderItems.purchaseOrderId, existingPO.id));
+        await tx.insert(schema.purchaseOrderItems).values(poItems);
+      });
+    } else {
+      if (req.body.notes !== undefined) {
+        updateData.notes = req.body.notes;
+      }
+      await db.update(schema.purchaseOrders).set(updateData).where(eq(schema.purchaseOrders.id, existingPO.id));
     }
 
-    const updated = await prisma.purchaseOrder.update({
-      where: { id: req.params.id },
-      data: updateData,
-      include: { items: { orderBy: { id: 'asc' } } }
-    });
+    const updatedList = await db.select().from(schema.purchaseOrders).where(eq(schema.purchaseOrders.id, existingPO.id)).limit(1);
+    const updated = updatedList[0];
+    const finalItems = await db.select().from(schema.purchaseOrderItems).where(eq(schema.purchaseOrderItems.purchaseOrderId, existingPO.id));
+    updated.items = finalItems;
 
     if (status === 'RECEIVED' && existingPO.status !== 'RECEIVED') {
-      for (const item of updated.items) {
+      for (const item of finalItems) {
         if (item.materialId) {
-          await prisma.material.update({
-            where: { id: item.materialId },
-            data: { balance: { increment: item.quantity } }
-          });
+          await db.execute(sql`
+            UPDATE materials 
+            SET balance = balance + ${Number(item.quantity)}
+            WHERE id = ${item.materialId}
+          `);
         }
       }
     }
@@ -522,14 +644,61 @@ exports.updatePurchaseOrder = async (req, res) => {
 };
 
 // Helper: load full PO
-const loadPO = (id) => prisma.purchaseOrder.findUnique({
-  where: { id },
-  include: {
-    vendor: true,
-    items: { orderBy: { id: 'asc' } },
-    createdBy: { select: { id: true, firstName: true, lastName: true } }
-  }
-});
+const loadPO = async (id) => {
+  const poRows = await db.select({
+    id: schema.purchaseOrders.id,
+    poNumber: schema.purchaseOrders.poNumber,
+    status: schema.purchaseOrders.status,
+    subTotal: schema.purchaseOrders.subTotal,
+    taxAmount: schema.purchaseOrders.taxAmount,
+    totalAmount: schema.purchaseOrders.totalAmount,
+    expectedDate: schema.purchaseOrders.expectedDate,
+    receivedDate: schema.purchaseOrders.receivedDate,
+    notes: schema.purchaseOrders.notes,
+    pdfUrl: schema.purchaseOrders.pdfUrl,
+    vendorId: schema.purchaseOrders.vendorId,
+    createdById: schema.purchaseOrders.createdById,
+    createdAt: schema.purchaseOrders.createdAt,
+    updatedAt: schema.purchaseOrders.updatedAt,
+    vendorId_: schema.vendors.id,
+    vendorCompanyName: schema.vendors.companyName,
+    vendorContactName: schema.vendors.contactName,
+    vendorPhone: schema.vendors.phone,
+    vendorEmail: schema.vendors.email,
+    vendorAddress: schema.vendors.address,
+    vendorCity: schema.vendors.city,
+    vendorState: schema.vendors.state,
+    vendorPinCode: schema.vendors.pinCode,
+    vendorGstNumber: schema.vendors.gstNumber,
+    createdById_: schema.users.id,
+    createdByFirstName: schema.users.firstName,
+    createdByLastName: schema.users.lastName
+  })
+  .from(schema.purchaseOrders)
+  .leftJoin(schema.vendors, eq(schema.purchaseOrders.vendorId, schema.vendors.id))
+  .leftJoin(schema.users, eq(schema.purchaseOrders.createdById, schema.users.id))
+  .where(eq(schema.purchaseOrders.id, id))
+  .limit(1);
+
+  if (poRows.length === 0) return null;
+  const rawLoadPo = poRows[0];
+  const po = {
+    id: rawLoadPo.id, poNumber: rawLoadPo.poNumber, status: rawLoadPo.status, subTotal: rawLoadPo.subTotal,
+    taxAmount: rawLoadPo.taxAmount, totalAmount: rawLoadPo.totalAmount, expectedDate: rawLoadPo.expectedDate,
+    receivedDate: rawLoadPo.receivedDate, notes: rawLoadPo.notes, pdfUrl: rawLoadPo.pdfUrl,
+    vendorId: rawLoadPo.vendorId, createdById: rawLoadPo.createdById, createdAt: rawLoadPo.createdAt, updatedAt: rawLoadPo.updatedAt,
+    vendor: rawLoadPo.vendorId_ ? { id: rawLoadPo.vendorId_, companyName: rawLoadPo.vendorCompanyName, contactName: rawLoadPo.vendorContactName, phone: rawLoadPo.vendorPhone, email: rawLoadPo.vendorEmail, address: rawLoadPo.vendorAddress, city: rawLoadPo.vendorCity, state: rawLoadPo.vendorState, pinCode: rawLoadPo.vendorPinCode, gstNumber: rawLoadPo.vendorGstNumber } : null,
+    createdBy: rawLoadPo.createdById_ ? { id: rawLoadPo.createdById_, firstName: rawLoadPo.createdByFirstName, lastName: rawLoadPo.createdByLastName } : null
+  };
+
+  const items = await db.select()
+    .from(schema.purchaseOrderItems)
+    .where(eq(schema.purchaseOrderItems.purchaseOrderId, po.id))
+    .orderBy(asc(schema.purchaseOrderItems.id));
+
+  po.items = items;
+  return po;
+};
 
 // GET /api/purchase/:id/pdf
 exports.generatePOPDF = async (req, res) => {
@@ -549,7 +718,10 @@ exports.generatePOPDF = async (req, res) => {
     await page.pdf({ path: filePath, format: 'A4', printBackground: true });
     await browser.close();
 
-    await prisma.purchaseOrder.update({ where: { id: req.params.id }, data: { pdfUrl: `/uploads/purchase-orders/${safe}.pdf` } });
+    await db.update(schema.purchaseOrders)
+      .set({ pdfUrl: `/uploads/purchase-orders/${safe}.pdf` })
+      .where(eq(schema.purchaseOrders.id, req.params.id));
+
     res.download(filePath, `PO-${safe}.pdf`);
   } catch (error) {
     console.error('PO PDF error:', error);

@@ -1,7 +1,18 @@
-const prisma = require('../utils/db');
+const { eq, and, or, like, inArray, sql, desc, asc, aliasedTable } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const { getSubordinateIds } = require('../middleware/permission.middleware');
+const { randomUUID } = require('crypto');
 
 const generateTaskId = () => `task_${Date.now()}`;
+
+// Helper to count records using Drizzle
+const countTasksQuery = async (conditions) => {
+  const result = await db.select({ count: sql`count(*)` })
+    .from(schema.tasks)
+    .where(conditions.length > 0 ? and(...conditions) : undefined);
+  return Number(result[0]?.count || 0);
+};
 
 // GET /api/tasks
 exports.getTasks = async (req, res) => {
@@ -9,29 +20,28 @@ exports.getTasks = async (req, res) => {
     const { status, priority, assignedToId, type, search, page = 1, limit = 100 } = req.query;
     const userId = req.user.id;
 
-    let where = { isArchived: false };
+    const conditions = [eq(schema.tasks.isArchived, false)];
 
     if (req.user.role === 'EMPLOYEE') {
-      // Employees see TEAM tasks assigned to them or their cascading subordinates
       const validUserIds = await getSubordinateIds(userId, true);
       validUserIds.push(userId);
 
-      where.type = 'TEAM';
-      where.OR = [
-        { assignedToId: { in: validUserIds } },
-        { createdById: userId }
-      ];
+      conditions.push(eq(schema.tasks.type, 'TEAM'));
+      conditions.push(
+        or(
+          inArray(schema.tasks.assignedToId, validUserIds),
+          eq(schema.tasks.createdById, userId)
+        )
+      );
     } else if (req.user.role === 'ADMIN') {
-      // Admins see all TEAM tasks (PERSONAL todos are separate in /todos)
-      where.type = 'TEAM';
+      conditions.push(eq(schema.tasks.type, 'TEAM'));
     }
 
-    // Additional query filters (additive, applied on top of role filter)
-    if (status)   where.status   = status;
-    if (priority) where.priority = priority;
-    if (type)     where.type     = type;
+    if (status)   conditions.push(eq(schema.tasks.status, status));
+    if (priority) conditions.push(eq(schema.tasks.priority, priority));
+    if (type)     conditions.push(eq(schema.tasks.type, type));
+
     if (assignedToId) {
-      // Employees may only query tasks for users within their subordinate scope
       if (req.user.role === 'EMPLOYEE') {
         const validUserIds = await getSubordinateIds(req.user.id, true);
         validUserIds.push(req.user.id);
@@ -39,70 +49,157 @@ exports.getTasks = async (req, res) => {
           return res.status(403).json({ success: false, message: 'Access denied: Cannot view tasks for this user.' });
         }
       }
-
-      // Narrow results to a specific assignee (used by EmployeeTracking expand)
-      if (where.OR) {
-        // If OR already exists from role check, wrap everything in an AND
-        where = {
-          AND: [
-            { OR: where.OR },
-            { assignedToId, type: 'TEAM' }
-          ]
-        };
-        delete where.OR; // cleanup top-level OR
-        delete where.type;
-      } else {
-        where.assignedToId = assignedToId;
-      }
+      conditions.push(eq(schema.tasks.assignedToId, assignedToId));
+      conditions.push(eq(schema.tasks.type, 'TEAM'));
     }
 
     if (search) {
-      where.title = { contains: search };
+      conditions.push(like(schema.tasks.title, `%${search}%`));
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const parsedPage = parseInt(page);
+    const parsedLimit = parseInt(limit);
+    const skip = (parsedPage - 1) * parsedLimit;
 
-    const [tasks, total] = await Promise.all([
-      prisma.task.findMany({
-        where,
-        include: {
-          assignedTo: { select: { id: true, firstName: true, lastName: true } },
-          createdBy:  { select: { id: true, firstName: true, lastName: true } },
-          _count: { select: { checklist: true } }
-        },
-        orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.task.count({ where })
+    const assignedTo = aliasedTable(schema.users, 'assignedTo');
+    const createdBy = aliasedTable(schema.users, 'createdBy');
+
+    // Run pagination & counts parallelly
+    const [tasksRawRows, total] = await Promise.all([
+      db.select({
+        id: schema.tasks.id,
+        title: schema.tasks.title,
+        description: schema.tasks.description,
+        status: schema.tasks.status,
+        priority: schema.tasks.priority,
+        type: schema.tasks.type,
+        dueDate: schema.tasks.dueDate,
+        completedAt: schema.tasks.completedAt,
+        completedVoiceUrl: schema.tasks.completedVoiceUrl,
+        reminderAt: schema.tasks.reminderAt,
+        reminderSent: schema.tasks.reminderSent,
+        createdById: schema.tasks.createdById,
+        assignedToId: schema.tasks.assignedToId,
+        snapshotManagerId: schema.tasks.snapshotManagerId,
+        isArchived: schema.tasks.isArchived,
+        deletedAt: schema.tasks.deletedAt,
+        createdAt: schema.tasks.createdAt,
+        updatedAt: schema.tasks.updatedAt,
+        assignedToId_: assignedTo.id,
+        assignedToFirstName: assignedTo.firstName,
+        assignedToLastName: assignedTo.lastName,
+        createdById_: createdBy.id,
+        createdByFirstName: createdBy.firstName,
+        createdByLastName: createdBy.lastName
+      })
+      .from(schema.tasks)
+      .leftJoin(assignedTo, eq(schema.tasks.assignedToId, assignedTo.id))
+      .leftJoin(createdBy, eq(schema.tasks.createdById, createdBy.id))
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(asc(schema.tasks.status), asc(schema.tasks.dueDate))
+      .limit(parsedLimit)
+      .offset(skip),
+      countTasksQuery(conditions)
     ]);
 
-    // If requested or if assignedToId is present (typical for tracking), include Material Requests
-    let combinedData = tasks;
+    const tasksRows = tasksRawRows.map(r => ({
+      id: r.id, title: r.title, description: r.description, status: r.status,
+      priority: r.priority, type: r.type, dueDate: r.dueDate, completedAt: r.completedAt,
+      completedVoiceUrl: r.completedVoiceUrl, reminderAt: r.reminderAt, reminderSent: r.reminderSent,
+      createdById: r.createdById, assignedToId: r.assignedToId, snapshotManagerId: r.snapshotManagerId,
+      isArchived: r.isArchived, deletedAt: r.deletedAt, createdAt: r.createdAt, updatedAt: r.updatedAt,
+      assignedTo: r.assignedToId_ ? { id: r.assignedToId_, firstName: r.assignedToFirstName, lastName: r.assignedToLastName } : null,
+      createdBy: r.createdById_ ? { id: r.createdById_, firstName: r.createdByFirstName, lastName: r.createdByLastName } : null
+    }));
+
+    // Gather checklist item counts in memory (resolving join N+1 duplicates cleanly)
+    let checklistCountsMap = {};
+    if (tasksRows.length > 0) {
+      const taskIdsList = tasksRows.map(t => t.id);
+      const countsList = await db.select({
+        taskId: schema.taskChecklistItems.taskId,
+        count: sql`count(${schema.taskChecklistItems.id})`
+      })
+      .from(schema.taskChecklistItems)
+      .where(inArray(schema.taskChecklistItems.taskId, taskIdsList))
+      .groupBy(schema.taskChecklistItems.taskId);
+
+      for (const item of countsList) {
+        checklistCountsMap[item.taskId] = Number(item.count);
+      }
+    }
+
+    const formattedTasks = tasksRows.map(t => ({
+      ...t,
+      _count: {
+        checklist: checklistCountsMap[t.id] || 0
+      }
+    }));
+
+    let combinedData = formattedTasks;
     let combinedTotal = total;
 
     if (req.query.includeMaterialRequests === 'true' || (assignedToId && req.path.includes('/tasks') && !req.query.type)) {
-      const mreqWhere = { assignedToId: assignedToId || undefined };
-      
-      // Map task status filters to material request status
-      if (status) {
-        if (status === 'COMPLETED') mreqWhere.status = 'COMPLETE';
-        else if (status === 'PENDING') mreqWhere.status = 'PENDING';
-        else if (status === 'IN_PROGRESS') mreqWhere.status = 'IN_PROGRESS';
-        else if (status === 'CANCELLED') mreqWhere.status = 'INCOMPLETE';
+      const mreqConditions = [];
+      if (assignedToId) {
+        mreqConditions.push(eq(schema.materialRequests.assignedToId, assignedToId));
       }
 
-      const mreqs = await prisma.materialRequest.findMany({
-        where: mreqWhere,
-        include: {
-          assignedTo: { select: { id: true, firstName: true, lastName: true } },
-          createdBy:  { select: { id: true, firstName: true, lastName: true } },
-          items: true
-        },
-        orderBy: { createdAt: 'desc' }
-      });
+      if (status) {
+        if (status === 'COMPLETED') mreqConditions.push(eq(schema.materialRequests.status, 'COMPLETE'));
+        else if (status === 'PENDING') mreqConditions.push(eq(schema.materialRequests.status, 'PENDING'));
+        else if (status === 'IN_PROGRESS') mreqConditions.push(eq(schema.materialRequests.status, 'IN_PROGRESS'));
+        else if (status === 'CANCELLED') mreqConditions.push(eq(schema.materialRequests.status, 'INCOMPLETE'));
+      }
 
-      const formattedMreqs = mreqs.map(m => ({
+      const mreqAssignedTo = aliasedTable(schema.users, 'mreqAssignedTo');
+      const mreqCreatedBy = aliasedTable(schema.users, 'mreqCreatedBy');
+
+      const mreqsRaw = await db.select({
+        id: schema.materialRequests.id,
+        title: schema.materialRequests.title,
+        projectName: schema.materialRequests.projectName,
+        location: schema.materialRequests.location,
+        notes: schema.materialRequests.notes,
+        status: schema.materialRequests.status,
+        createdAt: schema.materialRequests.createdAt,
+        mreqAssignedToId_: mreqAssignedTo.id,
+        mreqAssignedToFirstName: mreqAssignedTo.firstName,
+        mreqAssignedToLastName: mreqAssignedTo.lastName,
+        mreqCreatedById_: mreqCreatedBy.id,
+        mreqCreatedByFirstName: mreqCreatedBy.firstName,
+        mreqCreatedByLastName: mreqCreatedBy.lastName
+      })
+      .from(schema.materialRequests)
+      .leftJoin(mreqAssignedTo, eq(schema.materialRequests.assignedToId, mreqAssignedTo.id))
+      .leftJoin(mreqCreatedBy, eq(schema.materialRequests.createdById, mreqCreatedBy.id))
+      .where(mreqConditions.length > 0 ? and(...mreqConditions) : undefined)
+      .orderBy(desc(schema.materialRequests.createdAt));
+
+      const mreqsRows = mreqsRaw.map(r => ({
+        id: r.id, title: r.title, projectName: r.projectName, location: r.location,
+        notes: r.notes, status: r.status, createdAt: r.createdAt,
+        assignedTo: r.mreqAssignedToId_ ? { id: r.mreqAssignedToId_, firstName: r.mreqAssignedToFirstName, lastName: r.mreqAssignedToLastName } : null,
+        createdBy: r.mreqCreatedById_ ? { id: r.mreqCreatedById_, firstName: r.mreqCreatedByFirstName, lastName: r.mreqCreatedByLastName } : null
+      }));
+
+      // Fetch items for these material requests
+      let itemsMap = {};
+      if (mreqsRows.length > 0) {
+        const mreqIds = mreqsRows.map(m => m.id);
+        const mreqItems = await db.select()
+          .from(schema.materialRequestItems)
+          .where(inArray(schema.materialRequestItems.materialRequestId, mreqIds));
+        
+        for (const item of mreqItems) {
+          if (!itemsMap[item.materialRequestId]) {
+            itemsMap[item.materialRequestId] = [];
+          }
+          itemsMap[item.materialRequestId].push(item);
+        }
+      }
+
+      const formattedMreqs = mreqsRows.map(m => ({
         id: m.id,
         title: `${m.title} (Material Request)`,
         description: `${m.projectName || ''} ${m.location || ''} ${m.notes || ''}`.trim(),
@@ -111,19 +208,24 @@ exports.getTasks = async (req, res) => {
         dueDate: m.createdAt,
         assignedTo: m.assignedTo,
         createdBy: m.createdBy,
-        items: m.items, // Pass items through
+        items: itemsMap[m.id] || [],
         isMaterialRequest: true,
         type: 'TEAM'
       }));
 
-      combinedData = [...tasks, ...formattedMreqs];
+      combinedData = [...formattedTasks, ...formattedMreqs];
       combinedTotal = total + formattedMreqs.length;
     }
 
     res.json({
       success: true,
       data: combinedData,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total: combinedTotal, pages: Math.ceil(combinedTotal / parseInt(limit)) }
+      pagination: {
+        page: parsedPage,
+        limit: parsedLimit,
+        total: combinedTotal,
+        pages: Math.ceil(combinedTotal / parsedLimit)
+      }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -133,16 +235,73 @@ exports.getTasks = async (req, res) => {
 // GET /api/tasks/:id
 exports.getTaskById = async (req, res) => {
   try {
-    const task = await prisma.task.findUnique({
-      where: { id: req.params.id },
-      include: {
-        assignedTo: { select: { id: true, firstName: true, lastName: true, email: true } },
-        createdBy:  { select: { id: true, firstName: true, lastName: true } },
-        checklist: { orderBy: { id: 'asc' } }
-      }
-    });
-    if (!task || task.isArchived) return res.status(404).json({ success: false, message: 'Task not found' });
-    res.json({ success: true, data: task });
+    const assignedTo = aliasedTable(schema.users, 'assignedTo');
+    const createdBy = aliasedTable(schema.users, 'createdBy');
+
+    const tasksRows = await db.select({
+      id: schema.tasks.id,
+      title: schema.tasks.title,
+      description: schema.tasks.description,
+      status: schema.tasks.status,
+      priority: schema.tasks.priority,
+      type: schema.tasks.type,
+      dueDate: schema.tasks.dueDate,
+      completedAt: schema.tasks.completedAt,
+      completedVoiceUrl: schema.tasks.completedVoiceUrl,
+      reminderAt: schema.tasks.reminderAt,
+      reminderSent: schema.tasks.reminderSent,
+      createdById: schema.tasks.createdById,
+      assignedToId: schema.tasks.assignedToId,
+      snapshotManagerId: schema.tasks.snapshotManagerId,
+      isArchived: schema.tasks.isArchived,
+      deletedAt: schema.tasks.deletedAt,
+      createdAt: schema.tasks.createdAt,
+      updatedAt: schema.tasks.updatedAt,
+      assignedToId_: assignedTo.id,
+      assignedToFirstName: assignedTo.firstName,
+      assignedToLastName: assignedTo.lastName,
+      assignedToEmail: assignedTo.email,
+      createdById_: createdBy.id,
+      createdByFirstName: createdBy.firstName,
+      createdByLastName: createdBy.lastName
+    })
+    .from(schema.tasks)
+    .leftJoin(assignedTo, eq(schema.tasks.assignedToId, assignedTo.id))
+    .leftJoin(createdBy, eq(schema.tasks.createdById, createdBy.id))
+    .where(
+      and(
+        eq(schema.tasks.id, req.params.id),
+        eq(schema.tasks.isArchived, false)
+      )
+    )
+    .limit(1);
+
+    if (tasksRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    const rawTask = tasksRows[0];
+    const mappedTask = {
+      id: rawTask.id, title: rawTask.title, description: rawTask.description, status: rawTask.status,
+      priority: rawTask.priority, type: rawTask.type, dueDate: rawTask.dueDate, completedAt: rawTask.completedAt,
+      completedVoiceUrl: rawTask.completedVoiceUrl, reminderAt: rawTask.reminderAt, reminderSent: rawTask.reminderSent,
+      createdById: rawTask.createdById, assignedToId: rawTask.assignedToId, snapshotManagerId: rawTask.snapshotManagerId,
+      isArchived: rawTask.isArchived, deletedAt: rawTask.deletedAt, createdAt: rawTask.createdAt, updatedAt: rawTask.updatedAt,
+      assignedTo: rawTask.assignedToId_ ? { id: rawTask.assignedToId_, firstName: rawTask.assignedToFirstName, lastName: rawTask.assignedToLastName, email: rawTask.assignedToEmail } : null,
+      createdBy: rawTask.createdById_ ? { id: rawTask.createdById_, firstName: rawTask.createdByFirstName, lastName: rawTask.createdByLastName } : null
+    };
+
+    const checklistItems = await db.select()
+      .from(schema.taskChecklistItems)
+      .where(eq(schema.taskChecklistItems.taskId, req.params.id))
+      .orderBy(asc(schema.taskChecklistItems.id));
+
+    const taskObj = {
+      ...mappedTask,
+      checklist: checklistItems
+    };
+
+    res.json({ success: true, data: taskObj });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -159,66 +318,103 @@ exports.createTask = async (req, res) => {
       assignmentVoiceUrl, assignmentVoiceNote
     } = req.body;
 
-    const task = await prisma.task.create({
-      data: {
-        title,
-        description,
-        // Force TEAM type when assigning to someone else so task appears in task list
-        type: type || (assignedToId && assignedToId !== req.user.id ? 'TEAM' : 'PERSONAL'),
-        priority: priority || 'MEDIUM',
-        dueDate: new Date(dueDate),
-        startDate: startDate ? new Date(startDate) : null,
-        createdById: req.user.id,
-        assignedToId: assignedToId || req.user.id,
-        isRecurring: isRecurring || false,
-        recurrence: recurrence || null,
-        recurrenceEnd: recurrenceEnd ? new Date(recurrenceEnd) : null,
-        reminderAt: reminderAt ? new Date(reminderAt) : null,
-        assignmentVoiceUrl: assignmentVoiceUrl || null,
-        assignmentVoiceNote: assignmentVoiceNote || null,
-        checklist: checklist?.length ? {
-          create: checklist.map(item => ({ content: item }))
-        } : undefined
-      },
-      include: {
-        assignedTo: { select: { id: true, firstName: true, lastName: true } },
-        createdBy:  { select: { id: true, firstName: true, lastName: true } },
-        checklist: true
+    const taskId = generateTaskId();
+
+    const taskData = {
+      id: taskId,
+      title,
+      description: description || null,
+      type: type || (assignedToId && assignedToId !== req.user.id ? 'TEAM' : 'PERSONAL'),
+      priority: priority || 'MEDIUM',
+      dueDate: new Date(dueDate),
+      startDate: startDate ? new Date(startDate) : null,
+      createdById: req.user.id,
+      assignedToId: assignedToId || req.user.id,
+      isRecurring: isRecurring || false,
+      recurrence: recurrence || null,
+      recurrenceEnd: recurrenceEnd ? new Date(recurrenceEnd) : null,
+      reminderAt: reminderAt ? new Date(reminderAt) : null,
+      assignmentVoiceUrl: assignmentVoiceUrl || null,
+      assignmentVoiceNote: assignmentVoiceNote || null,
+      status: 'PENDING',
+      isArchived: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const taskWithRelation = await db.transaction(async (tx) => {
+      await tx.insert(schema.tasks).values(taskData);
+      
+      let insertedChecklist = [];
+      if (checklist && checklist.length > 0) {
+        insertedChecklist = checklist.map(item => ({
+          id: randomUUID(),
+          taskId: taskId,
+          content: item,
+          isCompleted: false
+        }));
+        await tx.insert(schema.taskChecklistItems).values(insertedChecklist);
       }
+
+      const assignedToUserList = await db.select({
+        id: schema.users.id,
+        firstName: schema.users.firstName,
+        lastName: schema.users.lastName
+      })
+      .from(schema.users)
+      .where(eq(schema.users.id, taskData.assignedToId))
+      .limit(1);
+
+      const createdByUserList = await db.select({
+        id: schema.users.id,
+        firstName: schema.users.firstName,
+        lastName: schema.users.lastName
+      })
+      .from(schema.users)
+      .where(eq(schema.users.id, taskData.createdById))
+      .limit(1);
+
+      return {
+        ...taskData,
+        assignedTo: assignedToUserList[0] || null,
+        createdBy: createdByUserList[0] || null,
+        checklist: insertedChecklist
+      };
     });
 
-    // Notify assignee via Socket.IO
+    // Notify assignee via Socket.IO & notification table
     const io = req.app.get('io');
-    if (task.assignedToId !== req.user.id) {
-      io.emit('notification', {
-        type: 'TASK_ASSIGNED',
-        title: 'New Task Assigned',
-        body: `"${task.title}" has been assigned to you`,
-        entityType: 'task',
-        entityId: task.id,
-        targetUserId: task.assignedToId
-      });
-
-      await prisma.notification.create({
-        data: {
-          userId: task.assignedToId,
+    if (taskWithRelation.assignedToId !== req.user.id) {
+      if (io) {
+        io.emit('notification', {
           type: 'TASK_ASSIGNED',
           title: 'New Task Assigned',
-          body: `"${task.title}" has been assigned to you`,
+          body: `"${taskWithRelation.title}" has been assigned to you`,
           entityType: 'task',
-          entityId: task.id
-        }
+          entityId: taskWithRelation.id,
+          targetUserId: taskWithRelation.assignedToId
+        });
+      }
+
+      await db.insert(schema.notifications).values({
+        id: randomUUID(),
+        userId: taskWithRelation.assignedToId,
+        type: 'TASK_ASSIGNED',
+        title: 'New Task Assigned',
+        body: `"${taskWithRelation.title}" has been assigned to you`,
+        entityType: 'task',
+        entityId: taskWithRelation.id,
+        isRead: false,
+        createdAt: new Date()
       });
     }
 
-    // Force real-time UI refresh for both sides
-    const ioRefresh = req.app.get('io');
-    if (ioRefresh) {
-      ioRefresh.emit('REFRESH_DATA', { module: 'TASKS' });
-      ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
+    if (io) {
+      io.emit('REFRESH_DATA', { module: 'TASKS' });
+      io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    res.status(201).json({ success: true, data: task });
+    res.status(201).json({ success: true, data: taskWithRelation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -230,21 +426,59 @@ exports.updateTask = async (req, res) => {
     const { id } = req.params;
     const { title, description, priority, dueDate, status, assignedToId } = req.body;
 
-    const updated = await prisma.task.update({
-      where: { id },
-      data: {
-        ...(title !== undefined && { title }),
-        ...(description !== undefined && { description }),
-        ...(priority && { priority }),
-        ...(dueDate && { dueDate: new Date(dueDate) }),
-        ...(status && { status }),
-        ...(assignedToId && { assignedToId })
-      },
-      include: {
-        assignedTo: { select: { id: true, firstName: true, lastName: true } },
-        createdBy:  { select: { id: true, firstName: true, lastName: true } }
-      }
-    });
+    const data = {
+      updatedAt: new Date()
+    };
+    if (title !== undefined) data.title = title;
+    if (description !== undefined) data.description = description;
+    if (priority !== undefined) data.priority = priority;
+    if (dueDate !== undefined) data.dueDate = new Date(dueDate);
+    if (status !== undefined) data.status = status;
+    if (assignedToId !== undefined) data.assignedToId = assignedToId;
+
+    await db.update(schema.tasks)
+      .set(data)
+      .where(eq(schema.tasks.id, id));
+
+    const assignedTo = aliasedTable(schema.users, 'assignedTo');
+    const createdBy = aliasedTable(schema.users, 'createdBy');
+
+    const updatedTaskRows = await db.select({
+      id: schema.tasks.id,
+      title: schema.tasks.title,
+      description: schema.tasks.description,
+      status: schema.tasks.status,
+      priority: schema.tasks.priority,
+      type: schema.tasks.type,
+      dueDate: schema.tasks.dueDate,
+      completedAt: schema.tasks.completedAt,
+      createdById: schema.tasks.createdById,
+      assignedToId: schema.tasks.assignedToId,
+      createdAt: schema.tasks.createdAt,
+      updatedAt: schema.tasks.updatedAt,
+      assignedToId_: assignedTo.id,
+      assignedToFirstName: assignedTo.firstName,
+      assignedToLastName: assignedTo.lastName,
+      createdById_: createdBy.id,
+      createdByFirstName: createdBy.firstName,
+      createdByLastName: createdBy.lastName
+    })
+    .from(schema.tasks)
+    .leftJoin(assignedTo, eq(schema.tasks.assignedToId, assignedTo.id))
+    .leftJoin(createdBy, eq(schema.tasks.createdById, createdBy.id))
+    .where(eq(schema.tasks.id, id))
+    .limit(1);
+
+    const rawUpdated = updatedTaskRows[0];
+    const updatedTask = rawUpdated ? {
+      id: rawUpdated.id, title: rawUpdated.title, description: rawUpdated.description,
+      status: rawUpdated.status, priority: rawUpdated.priority, type: rawUpdated.type,
+      dueDate: rawUpdated.dueDate, completedAt: rawUpdated.completedAt,
+      createdById: rawUpdated.createdById, assignedToId: rawUpdated.assignedToId,
+      createdAt: rawUpdated.createdAt, updatedAt: rawUpdated.updatedAt,
+      assignedTo: rawUpdated.assignedToId_ ? { id: rawUpdated.assignedToId_, firstName: rawUpdated.assignedToFirstName, lastName: rawUpdated.assignedToLastName } : null,
+      createdBy: rawUpdated.createdById_ ? { id: rawUpdated.createdById_, firstName: rawUpdated.createdByFirstName, lastName: rawUpdated.createdByLastName } : null
+    } : null;
 
     const io = req.app.get('io');
     if (io) {
@@ -252,7 +486,7 @@ exports.updateTask = async (req, res) => {
       io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: updatedTask });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -264,52 +498,69 @@ exports.completeTask = async (req, res) => {
     const { id } = req.params;
     const { completionVoiceUrl, completionVoiceNote, attachmentUrl } = req.body;
 
-    const task = await prisma.task.findUnique({ where: { id } });
-    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+    const taskList = await db.select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .limit(1);
 
-    // Snapshot the assignee's current managerId for time-travel analytics
-    const assignee = await prisma.user.findUnique({
-      where: { id: task.assignedToId },
-      select: { managerId: true }
-    });
+    if (taskList.length === 0) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+    const task = taskList[0];
 
-    const updated = await prisma.task.update({
-      where: { id },
-      data: {
-        status: 'COMPLETED',
-        completedAt: new Date(),
-        completionVoiceUrl: completionVoiceUrl || null,
-        completionVoiceNote: completionVoiceNote || null,
-        attachmentUrl: attachmentUrl || null,
-        snapshotManagerId: assignee?.managerId || null
-      }
-    });
+    const assigneeList = await db.select({ managerId: schema.users.managerId })
+      .from(schema.users)
+      .where(eq(schema.users.id, task.assignedToId))
+      .limit(1);
+    
+    const assignee = assigneeList[0];
 
-    // Notify task creator
+    const updateData = {
+      status: 'COMPLETED',
+      completedAt: new Date(),
+      completedVoiceUrl: completionVoiceUrl || null,
+      completionVoiceNote: completionVoiceNote || null,
+      attachmentUrl: attachmentUrl || null,
+      snapshotManagerId: assignee?.managerId || null,
+      updatedAt: new Date()
+    };
+
+    await db.update(schema.tasks)
+      .set(updateData)
+      .where(eq(schema.tasks.id, id));
+
+    const updatedTask = {
+      ...task,
+      ...updateData
+    };
+
     const io = req.app.get('io');
     if (task.createdById !== req.user.id) {
       const notifBody = completionVoiceUrl
         ? `"${task.title}" marked complete. Voice note attached.`
         : `"${task.title}" has been marked as completed`;
 
-      io.emit('notification', {
+      if (io) {
+        io.emit('notification', {
+          type: 'TASK_COMPLETED',
+          title: 'Task Completed',
+          body: notifBody,
+          entityType: 'task',
+          entityId: id,
+          targetUserId: task.createdById
+        });
+      }
+
+      await db.insert(schema.notifications).values({
+        id: randomUUID(),
+        userId: task.createdById,
         type: 'TASK_COMPLETED',
         title: 'Task Completed',
         body: notifBody,
         entityType: 'task',
         entityId: id,
-        targetUserId: task.createdById
-      });
-
-      await prisma.notification.create({
-        data: {
-          userId: task.createdById,
-          type: 'TASK_COMPLETED',
-          title: 'Task Completed',
-          body: notifBody,
-          entityType: 'task',
-          entityId: id
-        }
+        isRead: false,
+        createdAt: new Date()
       });
     }
 
@@ -318,7 +569,7 @@ exports.completeTask = async (req, res) => {
       io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: updatedTask });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -330,42 +581,58 @@ exports.failTask = async (req, res) => {
     const { id } = req.params;
     const { failureReason, attachmentUrl, completionVoiceUrl } = req.body;
 
-    const task = await prisma.task.findUnique({ where: { id } });
-    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+    const taskList = await db.select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, id))
+      .limit(1);
 
-    const updated = await prisma.task.update({
-      where: { id },
-      data: {
-        status: 'CANCELLED',
-        failureReason: failureReason || null,
-        attachmentUrl: attachmentUrl || null,
-        completionVoiceUrl: completionVoiceUrl || null
-      }
-    });
+    if (taskList.length === 0) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+    const task = taskList[0];
 
-    // Notify task creator
+    const updateData = {
+      status: 'CANCELLED',
+      failureReason: failureReason || null,
+      attachmentUrl: attachmentUrl || null,
+      completedVoiceUrl: completionVoiceUrl || null, // Fail task maps to completionVoiceUrl in DB schema as well
+      updatedAt: new Date()
+    };
+
+    await db.update(schema.tasks)
+      .set(updateData)
+      .where(eq(schema.tasks.id, id));
+
+    const updatedTask = {
+      ...task,
+      ...updateData
+    };
+
     const io = req.app.get('io');
     if (task.createdById !== req.user.id) {
       const notifBody = `"${task.title}" was marked incomplete. Reason: ${failureReason?.substring(0, 50) || 'None'}`;
 
-      io.emit('notification', {
+      if (io) {
+        io.emit('notification', {
+          type: 'TASK_COMPLETED',
+          title: 'Task Incomplete',
+          body: notifBody,
+          entityType: 'task',
+          entityId: id,
+          targetUserId: task.createdById
+        });
+      }
+
+      await db.insert(schema.notifications).values({
+        id: randomUUID(),
+        userId: task.createdById,
         type: 'TASK_COMPLETED',
         title: 'Task Incomplete',
         body: notifBody,
         entityType: 'task',
         entityId: id,
-        targetUserId: task.createdById
-      });
-
-      await prisma.notification.create({
-        data: {
-          userId: task.createdById,
-          type: 'TASK_COMPLETED',
-          title: 'Task Incomplete',
-          body: notifBody,
-          entityType: 'task',
-          entityId: id
-        }
+        isRead: false,
+        createdAt: new Date()
       });
     }
 
@@ -374,7 +641,7 @@ exports.failTask = async (req, res) => {
       io.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: updatedTask });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -384,17 +651,26 @@ exports.failTask = async (req, res) => {
 exports.toggleChecklistItem = async (req, res) => {
   try {
     const { itemId } = req.params;
-    const item = await prisma.taskChecklistItem.findUnique({ where: { id: itemId } });
-    if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+    const itemRows = await db.select()
+      .from(schema.taskChecklistItems)
+      .where(eq(schema.taskChecklistItems.id, itemId))
+      .limit(1);
 
-    const updated = await prisma.taskChecklistItem.update({
-      where: { id: itemId },
-      data: {
-        isCompleted: !item.isCompleted,
-        completedAt: !item.isCompleted ? new Date() : null
-      }
-    });
-    res.json({ success: true, data: updated });
+    if (itemRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Item not found' });
+    }
+    const item = itemRows[0];
+
+    const data = {
+      isCompleted: !item.isCompleted,
+      completedAt: !item.isCompleted ? new Date() : null
+    };
+
+    await db.update(schema.taskChecklistItems)
+      .set(data)
+      .where(eq(schema.taskChecklistItems.id, itemId));
+
+    res.json({ success: true, data: { ...item, ...data } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -403,13 +679,23 @@ exports.toggleChecklistItem = async (req, res) => {
 // Archive task — soft delete
 exports.deleteTask = async (req, res) => {
   try {
-    const task = await prisma.task.findUnique({ where: { id: req.params.id } });
-    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+    const taskRows = await db.select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.id, req.params.id))
+      .limit(1);
 
-    await prisma.task.update({
-      where: { id: req.params.id },
-      data: { isArchived: true, deletedAt: new Date() }
-    });
+    if (taskRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    await db.update(schema.tasks)
+      .set({
+        isArchived: true,
+        deletedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(schema.tasks.id, req.params.id));
+
     res.json({ success: true, message: 'Task archived successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -421,7 +707,14 @@ exports.getTaskStats = async (req, res) => {
   try {
     let targetIds = [];
     if (req.user.role === 'ADMIN') {
-      const allEmps = await prisma.user.findMany({ where: { role: 'EMPLOYEE', status: 'ACTIVE' }, select: { id: true } });
+      const allEmps = await db.select({ id: schema.users.id })
+        .from(schema.users)
+        .where(
+          and(
+            eq(schema.users.role, 'EMPLOYEE'),
+            eq(schema.users.status, 'ACTIVE')
+          )
+        );
       targetIds = allEmps.map(u => u.id);
     } else {
       targetIds = await getSubordinateIds(req.user.id, true);
@@ -429,27 +722,62 @@ exports.getTaskStats = async (req, res) => {
 
     if (targetIds.length === 0) return res.json({ success: true, data: [] });
 
-    const employees = await prisma.user.findMany({
-      where: { id: { in: targetIds }, status: 'ACTIVE' },
-      select: { id: true, firstName: true, lastName: true, managerId: true }
-    });
+    const employees = await db.select({
+      id: schema.users.id,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName,
+      managerId: schema.users.managerId
+    })
+    .from(schema.users)
+    .where(
+      and(
+        inArray(schema.users.id, targetIds),
+        eq(schema.users.status, 'ACTIVE')
+      )
+    );
 
     const stats = await Promise.all(employees.map(async (emp) => {
-      // Fetch Task stats
+      // Helper function to count tasks for this employee with extra status filters
+      const countTasksForEmp = async (extraConditions = []) => {
+        const cond = [
+          eq(schema.tasks.assignedToId, emp.id),
+          eq(schema.tasks.type, 'TEAM'),
+          eq(schema.tasks.isArchived, false),
+          ...extraConditions
+        ];
+        const resCount = await db.select({ count: sql`count(*)` })
+          .from(schema.tasks)
+          .where(and(...cond));
+        return Number(resCount[0]?.count || 0);
+      };
+
+      // Helper function to count material requests for this employee with extra status filters
+      const countMreqsForEmp = async (extraConditions = []) => {
+        const cond = [
+          eq(schema.materialRequests.assignedToId, emp.id),
+          ...extraConditions
+        ];
+        const resCount = await db.select({ count: sql`count(*)` })
+          .from(schema.materialRequests)
+          .where(cond.length > 0 ? and(...cond) : undefined);
+        return Number(resCount[0]?.count || 0);
+      };
+
+      // Fetch Task stats parallelly
       const [taskTotal, taskCompleted, taskOverdue, taskPending, taskInProgress] = await Promise.all([
-        prisma.task.count({ where: { assignedToId: emp.id, type: 'TEAM', isArchived: false } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'COMPLETED', type: 'TEAM', isArchived: false } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'OVERDUE', type: 'TEAM', isArchived: false } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'PENDING', type: 'TEAM', isArchived: false } }),
-        prisma.task.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS', type: 'TEAM', isArchived: false } })
+        countTasksForEmp(),
+        countTasksForEmp([eq(schema.tasks.status, 'COMPLETED')]),
+        countTasksForEmp([eq(schema.tasks.status, 'OVERDUE')]),
+        countTasksForEmp([eq(schema.tasks.status, 'PENDING')]),
+        countTasksForEmp([eq(schema.tasks.status, 'IN_PROGRESS')])
       ]);
 
-      // Fetch Material Request stats
+      // Fetch Material Request stats parallelly
       const [mreqTotal, mreqCompleted, mreqPending, mreqInProgress] = await Promise.all([
-        prisma.materialRequest.count({ where: { assignedToId: emp.id } }),
-        prisma.materialRequest.count({ where: { assignedToId: emp.id, status: 'COMPLETE' } }),
-        prisma.materialRequest.count({ where: { assignedToId: emp.id, status: 'PENDING' } }),
-        prisma.materialRequest.count({ where: { assignedToId: emp.id, status: 'IN_PROGRESS' } })
+        countMreqsForEmp(),
+        countMreqsForEmp([eq(schema.materialRequests.status, 'COMPLETE')]),
+        countMreqsForEmp([eq(schema.materialRequests.status, 'PENDING')]),
+        countMreqsForEmp([eq(schema.materialRequests.status, 'IN_PROGRESS')])
       ]);
 
       const total = taskTotal + mreqTotal;

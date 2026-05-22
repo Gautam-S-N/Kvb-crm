@@ -1,27 +1,35 @@
 const cron = require('node-cron');
+const { eq, and, not, lt } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
+const { randomUUID } = require('crypto');
 
 const startLeadEscalationJob = (app) => {
   // Run everyday at 09:00 AM to check for neglected leads
   cron.schedule('0 9 * * *', async () => {
     console.log('[CRON] Running daily Lead Escalation check...');
     try {
-      const { PrismaClient } = require('@prisma/client');
-      const prisma = new PrismaClient();
-      
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
       // Find active leads that haven't been touched in over 7 days
-      const neglectedLeads = await prisma.lead.findMany({
-        where: {
-          isArchived: false,
-          status: { notIn: ['WON', 'LOST'] },
-          updatedAt: { lt: sevenDaysAgo }
-        },
-        include: { 
-          assignedTo: { select: { id: true, firstName: true, managerId: true } } 
-        }
-      });
+      const neglectedLeads = await db.select({
+        id: schema.leads.id,
+        leadNumber: schema.leads.leadNumber,
+        assignedToId: schema.users.id,
+        assignedToFirstName: schema.users.firstName,
+        assignedToManagerId: schema.users.managerId
+      })
+      .from(schema.leads)
+      .leftJoin(schema.users, eq(schema.leads.assignedToId, schema.users.id))
+      .where(
+        and(
+          eq(schema.leads.isArchived, false),
+          not(eq(schema.leads.status, 'WON')),
+          not(eq(schema.leads.status, 'LOST')),
+          lt(schema.leads.updatedAt, sevenDaysAgo)
+        )
+      );
 
       if (neglectedLeads.length === 0) {
         console.log('[CRON] No neglected leads found.');
@@ -31,10 +39,10 @@ const startLeadEscalationJob = (app) => {
       const io = app.get('io');
       
       for (const lead of neglectedLeads) {
-        if (!lead.assignedTo) continue;
+        if (!lead.assignedToId) continue;
 
-        const employeeId = lead.assignedTo.id;
-        const managerId = lead.assignedTo.managerId;
+        const employeeId = lead.assignedToId;
+        const managerId = lead.assignedToManagerId;
         const body = `Lead #${lead.leadNumber} has not been updated in over 7 days.`;
 
         // 1. Notify the Employee
@@ -48,20 +56,21 @@ const startLeadEscalationJob = (app) => {
             targetUserId: employeeId
           });
         }
-        await prisma.notification.create({
-          data: {
-            userId: employeeId,
-            type: 'LEAD_NEGLECTED',
-            title: 'Lead Needs Attention',
-            body,
-            entityType: 'lead',
-            entityId: lead.id
-          }
+        await db.insert(schema.notifications).values({
+          id: randomUUID(),
+          userId: employeeId,
+          type: 'LEAD_NEGLECTED',
+          title: 'Lead Needs Attention',
+          body,
+          entityType: 'lead',
+          entityId: lead.id,
+          isRead: false,
+          createdAt: new Date()
         });
 
         // 2. Escalate to the Manager (if they have one)
         if (managerId) {
-          const escBody = `Escalation: ${lead.assignedTo.firstName} has a lead (#${lead.leadNumber}) untouched for over 7 days.`;
+          const escBody = `Escalation: ${lead.assignedToFirstName} has a lead (#${lead.leadNumber}) untouched for over 7 days.`;
           if (io) {
             io.emit('notification', {
               type: 'LEAD_ESCALATED',
@@ -72,15 +81,16 @@ const startLeadEscalationJob = (app) => {
               targetUserId: managerId
             });
           }
-          await prisma.notification.create({
-            data: {
-              userId: managerId,
-              type: 'LEAD_ESCALATED',
-              title: 'Lead Escalation',
-              body: escBody,
-              entityType: 'lead',
-              entityId: lead.id
-            }
+          await db.insert(schema.notifications).values({
+            id: randomUUID(),
+            userId: managerId,
+            type: 'LEAD_ESCALATED',
+            title: 'Lead Escalation',
+            body: escBody,
+            entityType: 'lead',
+            entityId: lead.id,
+            isRead: false,
+            createdAt: new Date()
           });
         }
       }

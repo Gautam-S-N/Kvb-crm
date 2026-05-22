@@ -169,34 +169,40 @@ export default function DCRawMaterials() {
                 <th className="px-4 py-3">Item Name</th>
                 <th className="px-4 py-3">Code</th>
                 <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Size</th>
                 <th className="px-4 py-3 text-right">Qty</th>
                 <th className="px-4 py-3">Unit</th>
                 <th className="px-4 py-3 text-right">Rate (₹)</th>
-                <th className="px-4 py-3">Location</th>
                 <th className="px-4 py-3 text-center">Stock</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {isLoading && filtered.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>
+                <tr><td colSpan={11} className="px-4 py-10 text-center text-gray-400">Loading…</td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-10 text-center text-gray-400">No DC raw materials found.</td></tr>
+                <tr><td colSpan={11} className="px-4 py-10 text-center text-gray-400">No DC raw materials found.</td></tr>
               ) : filtered.map((m, i) => (
                 <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 text-sm transition-colors">
                   <td className="px-4 py-3 text-gray-400 text-xs">{i + 1}</td>
-                  <td className="px-4 py-3 font-medium text-gray-900 dark:text-white max-w-xs">
+                  <td className="px-4 py-3 font-medium text-gray-900 dark:text-white max-w-[180px]">
                     <div className="font-semibold">{m.itemName}</div>
-                    {m.remarks && <div className="text-[10px] text-gray-400 truncate max-w-[180px]">{m.remarks}</div>}
+                    {m.projectSite && <div className="text-[10px] text-gray-400 truncate">{m.projectSite}</div>}
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">{m.itemCode || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-gray-500 whitespace-nowrap">{m.itemCode || '—'}</td>
                   <td className="px-4 py-3">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">{m.category}</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 whitespace-nowrap">{m.category}</span>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[160px]">
+                    <span className="truncate block" title={m.location || ''}>{m.location || '—'}</span>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-700 dark:text-gray-300 max-w-[140px]">
+                    <span className="truncate block font-mono" title={m.remarks || ''}>{m.remarks || '—'}</span>
                   </td>
                   <td className="px-4 py-3 text-right font-bold text-gray-900 dark:text-white">{Number(m.balance)}</td>
                   <td className="px-4 py-3 text-xs text-gray-500 uppercase">{m.unit}</td>
                   <td className="px-4 py-3 text-right text-gray-600 dark:text-gray-400">₹{Number(m.rate).toLocaleString('en-IN')}</td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{m.location || m.projectSite || '—'}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${stockBadge(m.balance, m.minQuantity)}`}>
                       {Number(m.balance) <= 0 ? 'OUT' : Number(m.balance) <= Number(m.minQuantity) ? 'LOW' : 'OK'}
@@ -276,10 +282,17 @@ export default function DCRawMaterials() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Location / Site</label>
+                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Type (Material Spec)</label>
                   <input value={form.location} onChange={e => setForm(p => ({...p, location: e.target.value}))}
                     className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-green-500 outline-none"
-                    placeholder="Warehouse / Project Site"/>
+                    placeholder="e.g. Tube 20x20 / MS Seamless / Fasteners"/>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Section</label>
+                  <input value={form.projectSite} onChange={e => setForm(p => ({...p, projectSite: e.target.value}))}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-green-500 outline-none"
+                    placeholder="e.g. Rotor support / Dish Stand"/>
                 </div>
 
                 {/* Qty row */}
@@ -306,10 +319,10 @@ export default function DCRawMaterials() {
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Remarks</label>
+                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Size / Dimensions</label>
                   <textarea rows={2} value={form.remarks} onChange={e => setForm(p => ({...p, remarks: e.target.value}))}
                     className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-green-500 outline-none resize-none"
-                    placeholder="Type, size specifications, notes…"/>
+                    placeholder="e.g. 6000x20x20x3"/>
                 </div>
               </div>
 

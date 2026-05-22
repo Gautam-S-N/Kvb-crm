@@ -1,4 +1,6 @@
-const prisma = require('../utils/db');
+const { eq, and, or, inArray, sql, gte, desc } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 
 // Get dashboard metrics
 exports.getDashboardMetrics = async (req, res) => {
@@ -6,38 +8,49 @@ exports.getDashboardMetrics = async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
     
-    // Build where clause based on role
-    let leadWhere = {};
-    let saleWhere = {};
+    // Build clauses based on role
+    const leadConditions = [];
+    const saleConditions = [];
     
     if (userRole === 'EMPLOYEE') {
-      leadWhere.assignedToId = userId;
-      saleWhere.createdById = userId;
+      leadConditions.push(eq(schema.leads.assignedToId, userId));
+      saleConditions.push(eq(schema.sales.createdById, userId));
     } else if (userRole === 'USER') {
-      leadWhere.createdById = userId;
-      saleWhere.createdById = userId;
+      leadConditions.push(eq(schema.leads.createdById, userId));
+      saleConditions.push(eq(schema.sales.createdById, userId));
     }
-    // Admin sees all data (no filter)
 
     // Get lead counts by status
-    const leadStats = await prisma.lead.groupBy({
-      by: ['status'],
-      where: leadWhere,
-      _count: { id: true },
-      _sum: { estimateAmount: true }
-    });
+    const leadStats = await db.select({
+      status: schema.leads.status,
+      count: sql`count(*)`,
+      sumEstimate: sql`sum(cast(${schema.leads.estimateAmount} as decimal(12,2)))`
+    })
+    .from(schema.leads)
+    .where(leadConditions.length > 0 ? and(...leadConditions) : undefined)
+    .groupBy(schema.leads.status);
 
     // Get total sales
-    const totalSales = await prisma.sale.aggregate({
-      where: saleWhere,
-      _count: { id: true },
-      _sum: { totalAmount: true }
-    });
+    const salesAgg = await db.select({
+      count: sql`count(*)`,
+      sumTotal: sql`sum(cast(${schema.sales.totalAmount} as decimal(12,2)))`
+    })
+    .from(schema.sales)
+    .where(saleConditions.length > 0 ? and(...saleConditions) : undefined);
 
-    // Get pending tasks — scoped to employee's own assigned tasks
-    const taskWhere = { type: 'TEAM', status: { in: ['PENDING', 'IN_PROGRESS'] } };
-    if (userRole === 'EMPLOYEE') taskWhere.assignedToId = userId;
-    const pendingTasks = await prisma.task.count({ where: taskWhere });
+    // Get pending tasks
+    const taskConditions = [
+      eq(schema.tasks.type, 'TEAM'),
+      inArray(schema.tasks.status, ['PENDING', 'IN_PROGRESS'])
+    ];
+    if (userRole === 'EMPLOYEE') {
+      taskConditions.push(eq(schema.tasks.assignedToId, userId));
+    }
+
+    const taskCountRes = await db.select({ count: sql`count(*)` })
+      .from(schema.tasks)
+      .where(and(...taskConditions));
+    const pendingTasks = Number(taskCountRes[0]?.count || 0);
 
     // Format lead stats
     const stats = {
@@ -52,25 +65,25 @@ exports.getDashboardMetrics = async (req, res) => {
     };
 
     leadStats.forEach(stat => {
-      const count = stat._count.id;
-      const value = stat._sum.estimateAmount || 0;
+      const count = Number(stat.count || 0);
+      const value = parseFloat(stat.sumEstimate || 0);
       
       stats.totalLeads += count;
-      stats.totalLeadValue += parseFloat(value);
+      stats.totalLeadValue += value;
 
       if (['NEW', 'INQUIRY', 'FOLLOW_UP', 'QUOTATION_SENT', 'ORDER_CONFIRMED'].includes(stat.status)) {
         stats.openLeads += count;
-        stats.openLeadValue += parseFloat(value);
+        stats.openLeadValue += value;
       }
       
       if (stat.status === 'WON') {
         stats.wonLeads += count;
-        stats.wonLeadValue += parseFloat(value);
+        stats.wonLeadValue += value;
       }
       
       if (stat.status === 'LOST') {
         stats.lostLeads += count;
-        stats.lostLeadValue += parseFloat(value);
+        stats.lostLeadValue += value;
       }
     });
 
@@ -80,15 +93,24 @@ exports.getDashboardMetrics = async (req, res) => {
     sixMonthsAgo.setDate(1);
     sixMonthsAgo.setHours(0,0,0,0);
 
-    const recentSales = await prisma.sale.findMany({
-      where: { ...saleWhere, saleDate: { gte: sixMonthsAgo } },
-      select: { saleDate: true, totalAmount: true }
-    });
+    const recentSales = await db.select({
+      saleDate: schema.sales.saleDate,
+      totalAmount: schema.sales.totalAmount
+    })
+    .from(schema.sales)
+    .where(and(
+      saleConditions.length > 0 ? and(...saleConditions) : undefined,
+      gte(schema.sales.saleDate, sixMonthsAgo)
+    ));
 
-    const recentLeads = await prisma.lead.findMany({
-      where: { ...leadWhere, createdAt: { gte: sixMonthsAgo } },
-      select: { createdAt: true }
-    });
+    const recentLeads = await db.select({
+      createdAt: schema.leads.createdAt
+    })
+    .from(schema.leads)
+    .where(and(
+      leadConditions.length > 0 ? and(...leadConditions) : undefined,
+      gte(schema.leads.createdAt, sixMonthsAgo)
+    ));
 
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const chartData = [];
@@ -106,34 +128,30 @@ exports.getDashboardMetrics = async (req, res) => {
     }
 
     recentSales.forEach(s => {
-      const m = s.saleDate.getMonth();
-      const y = s.saleDate.getFullYear();
+      const dateVal = new Date(s.saleDate);
+      const m = dateVal.getMonth();
+      const y = dateVal.getFullYear();
       const bin = chartData.find(b => b.month === m && b.year === y);
       if (bin) bin.Revenue += parseFloat(s.totalAmount || 0);
     });
 
     recentLeads.forEach(l => {
-      const m = l.createdAt.getMonth();
-      const y = l.createdAt.getFullYear();
+      const dateVal = new Date(l.createdAt);
+      const m = dateVal.getMonth();
+      const y = dateVal.getFullYear();
       const bin = chartData.find(b => b.month === m && b.year === y);
       if (bin) bin.Leads += 1;
     });
 
     // Get inventory metrics
-    const [totalMaterials, stockValueResult] = await Promise.all([
-      prisma.material.count(),
-      prisma.material.aggregate({
-        _sum: {
-          balance: true,
-          totalValue: true
-        }
-      })
-    ]);
+    const matCountRes = await db.select({ count: sql`count(*)` }).from(schema.materials);
+    const totalMaterials = Number(matCountRes[0]?.count || 0);
 
-    // Precise low stock check (balance <= minQuantity)
-    const allMaterials = await prisma.material.findMany({
-      select: { balance: true, minQuantity: true, rate: true }
-    });
+    const allMaterials = await db.select({
+      balance: schema.materials.balance,
+      minQuantity: schema.materials.minQuantity,
+      rate: schema.materials.rate
+    }).from(schema.materials);
     
     let preciseLowStockCount = 0;
     let totalStockValue = 0;
@@ -147,8 +165,8 @@ exports.getDashboardMetrics = async (req, res) => {
       data: {
         leads: stats,
         sales: {
-          count: totalSales._count.id,
-          revenue: parseFloat(totalSales._sum.totalAmount || 0)
+          count: Number(salesAgg[0]?.count || 0),
+          revenue: parseFloat(salesAgg[0]?.sumTotal || 0)
         },
         tasks: {
           pending: pendingTasks
@@ -172,27 +190,49 @@ exports.getRecentActivities = async (req, res) => {
     const userId = req.user.id;
     const userRole = req.user.role;
     
-    let where = {};
+    const actConditions = [];
     if (userRole === 'EMPLOYEE') {
-      where.OR = [
-        { lead: { assignedToId: userId } },
-        { performedBy: userId }
-      ];
+      actConditions.push(
+        or(
+          eq(schema.leads.assignedToId, userId),
+          eq(schema.leadTimeline.performedBy, userId)
+        )
+      );
     } else if (userRole === 'USER') {
-      where.performedBy = userId;
+      actConditions.push(eq(schema.leadTimeline.performedBy, userId));
     }
 
-    const activities = await prisma.leadTimeline.findMany({
-      where,
-      include: {
-        user: { select: { firstName: true, lastName: true } },
-        lead: { select: { leadNumber: true, title: true } }
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 10
-    });
+    const activitiesRaw = await db.select({
+      id: schema.leadTimeline.id,
+      leadId: schema.leadTimeline.leadId,
+      action: schema.leadTimeline.action,
+      description: schema.leadTimeline.description,
+      performedBy: schema.leadTimeline.performedBy,
+      createdAt: schema.leadTimeline.createdAt,
+      userFirstName: schema.users.firstName,
+      userLastName: schema.users.lastName,
+      leadNumber: schema.leads.leadNumber,
+      leadTitle: schema.leads.title
+    })
+    .from(schema.leadTimeline)
+    .leftJoin(schema.users, eq(schema.leadTimeline.performedBy, schema.users.id))
+    .leftJoin(schema.leads, eq(schema.leadTimeline.leadId, schema.leads.id))
+    .where(actConditions.length > 0 ? and(...actConditions) : undefined)
+    .orderBy(desc(schema.leadTimeline.createdAt))
+    .limit(10);
 
-    res.json({ success: true, data: activities });
+    const formattedActivities = activitiesRaw.map(act => ({
+      id: act.id,
+      leadId: act.leadId,
+      action: act.action,
+      description: act.description,
+      performedBy: act.performedBy,
+      createdAt: act.createdAt,
+      user: act.userFirstName ? { firstName: act.userFirstName, lastName: act.userLastName } : null,
+      lead: act.leadNumber ? { leadNumber: act.leadNumber, title: act.leadTitle } : null
+    }));
+
+    res.json({ success: true, data: formattedActivities });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

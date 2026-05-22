@@ -1,90 +1,165 @@
-const prisma = require('../utils/db');
+const { eq, and, or, like, inArray, sql, desc, asc } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const { incrementAndGet, syncCounterToMax } = require('../services/counter.service');
 const { getSubordinateIds } = require('../middleware/permission.middleware');
 const { triggerRefreshForEmployee } = require('../services/achievement.service');
+const { randomUUID } = require('crypto');
 
 // Get all leads with filters
 exports.getLeads = async (req, res) => {
   try {
     const { status, source, assignedTo, search, page = 1, limit = 100 } = req.query;
     
-    const where = { isArchived: false };
+    const conditions = [eq(schema.leads.isArchived, false)];
     
     // Role-based filtering
     if (req.user.role === 'EMPLOYEE') {
       const validUserIds = await getSubordinateIds(req.user.id, true);
       validUserIds.push(req.user.id);
       
-      where.assignedToId = { in: validUserIds };
+      conditions.push(inArray(schema.leads.assignedToId, validUserIds));
     } else if (req.user.role === 'USER') {
-      where.createdById = req.user.id;
+      conditions.push(eq(schema.leads.createdById, req.user.id));
     }
     
     // Apply filters
-    if (status) where.status = status;
-    if (source) where.source = source;
-    if (assignedTo) where.assignedToId = assignedTo;
+    if (status) conditions.push(eq(schema.leads.status, status));
+    if (source) conditions.push(eq(schema.leads.source, source));
+    if (assignedTo) conditions.push(eq(schema.leads.assignedToId, assignedTo));
     
     // Search by name, email, or lead number
     if (search) {
-      where.OR = [
-        { leadNumber: { contains: search } },
-        { title: { contains: search } },
-        { customer: { contactName: { contains: search } } },
-        { customer: { email: { contains: search } } },
-        { customer: { phone: { contains: search } } }
-      ];
+      conditions.push(
+        or(
+          like(schema.leads.leadNumber, `%${search}%`),
+          like(schema.leads.title, `%${search}%`),
+          like(schema.customers.contactName, `%${search}%`),
+          like(schema.customers.email, `%${search}%`),
+          like(schema.customers.phone, `%${search}%`)
+        )
+      );
     }
     
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const parsedPage = parseInt(page);
+    const parsedLimit = parseInt(limit);
+    const skip = (parsedPage - 1) * parsedLimit;
     
-    const [leads, total] = await Promise.all([
-      prisma.lead.findMany({
-        where,
-        include: {
-          customer: {
-            select: { 
-              id: true, 
-              contactName: true, 
-              email: true, 
-              phone: true, 
-              companyName: true 
-            }
-          },
-          assignedTo: {
-            select: { 
-              id: true, 
-              firstName: true, 
-              lastName: true, 
-              email: true 
-            }
-          },
-          createdBy: {
-            select: { 
-              id: true, 
-              firstName: true, 
-              lastName: true 
-            }
-          },
-          _count: {
-            select: { followUps: true, notes: true, quotations: true }
-          }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.lead.count({ where })
-    ]);
+    const totalResult = await db.select({ count: sql`count(*)` })
+      .from(schema.leads)
+      .leftJoin(schema.customers, eq(schema.leads.customerId, schema.customers.id))
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    const total = Number(totalResult[0]?.count || 0);
+
+    const leadsRows = await db.select({
+      id: schema.leads.id,
+      leadNumber: schema.leads.leadNumber,
+      title: schema.leads.title,
+      description: schema.leads.description,
+      status: schema.leads.status,
+      source: schema.leads.source,
+      estimateAmount: schema.leads.estimateAmount,
+      closeDate: schema.leads.closeDate,
+      customerId: schema.leads.customerId,
+      createdById: schema.leads.createdById,
+      assignedToId: schema.leads.assignedToId,
+      createdAt: schema.leads.createdAt,
+      updatedAt: schema.leads.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerEmail: schema.customers.email,
+      customerPhone: schema.customers.phone,
+      customerCompanyName: schema.customers.companyName,
+      assignedToId_: schema.users.id,
+      assignedToFirstName: schema.users.firstName,
+      assignedToLastName: schema.users.lastName,
+      assignedToEmail: schema.users.email
+    })
+    .from(schema.leads)
+    .leftJoin(schema.customers, eq(schema.leads.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.leads.assignedToId, schema.users.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(schema.leads.createdAt))
+    .limit(parsedLimit)
+    .offset(skip);
+
+    const leadsRowsMapped = leadsRows.map(r => ({
+      id: r.id, leadNumber: r.leadNumber, title: r.title, description: r.description,
+      status: r.status, source: r.source, estimateAmount: r.estimateAmount,
+      closeDate: r.closeDate, customerId: r.customerId, createdById: r.createdById,
+      assignedToId: r.assignedToId, createdAt: r.createdAt, updatedAt: r.updatedAt,
+      customer: r.customerId_ ? { id: r.customerId_, contactName: r.customerContactName, email: r.customerEmail, phone: r.customerPhone, companyName: r.customerCompanyName } : null,
+      assignedTo: r.assignedToId_ ? { id: r.assignedToId_, firstName: r.assignedToFirstName, lastName: r.assignedToLastName, email: r.assignedToEmail } : null
+    }));
+
+    // Fetch creators for the leads
+    let creatorsMap = {};
+    if (leadsRowsMapped.length > 0) {
+      const creatorIds = [...new Set(leadsRowsMapped.map(l => l.createdById))];
+      const creators = await db.select({
+        id: schema.users.id,
+        firstName: schema.users.firstName,
+        lastName: schema.users.lastName
+      })
+      .from(schema.users)
+      .where(inArray(schema.users.id, creatorIds));
+
+      for (const u of creators) {
+        creatorsMap[u.id] = u;
+      }
+    }
+
+    // N+1 aggregate counts in memory
+    let followUpMap = {};
+    let notesMap = {};
+    let quotationMap = {};
+
+    if (leadsRowsMapped.length > 0) {
+      const leadIds = leadsRowsMapped.map(l => l.id);
+
+      const fCounts = await db.select({ leadId: schema.followUps.leadId, count: sql`count(*)` })
+        .from(schema.followUps)
+        .where(inArray(schema.followUps.leadId, leadIds))
+        .groupBy(schema.followUps.leadId);
+      for (const item of fCounts) {
+        followUpMap[item.leadId] = Number(item.count);
+      }
+
+      const nCounts = await db.select({ leadId: schema.notes.leadId, count: sql`count(*)` })
+        .from(schema.notes)
+        .where(inArray(schema.notes.leadId, leadIds))
+        .groupBy(schema.notes.leadId);
+      for (const item of nCounts) {
+        notesMap[item.leadId] = Number(item.count);
+      }
+
+      const qCounts = await db.select({ leadId: schema.quotations.leadId, count: sql`count(*)` })
+        .from(schema.quotations)
+        .where(inArray(schema.quotations.leadId, leadIds))
+        .groupBy(schema.quotations.leadId);
+      for (const item of qCounts) {
+        quotationMap[item.leadId] = Number(item.count);
+      }
+    }
+
+    const formattedLeads = leadsRowsMapped.map(l => ({
+      ...l,
+      createdBy: creatorsMap[l.createdById] || null,
+      _count: {
+        followUps: followUpMap[l.id] || 0,
+        notes: notesMap[l.id] || 0,
+        quotations: quotationMap[l.id] || 0
+      }
+    }));
     
     res.json({
       success: true,
-      data: leads,
+      data: formattedLeads,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: parsedPage,
+        limit: parsedLimit,
         total,
-        pages: Math.ceil(total / parseInt(limit))
+        pages: Math.ceil(total / parsedLimit)
       }
     });
   } catch (error) {
@@ -97,87 +172,223 @@ exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
     
-    const lead = await prisma.lead.findUnique({
-      where: { id, isArchived: false },
-      include: {
-        customer: true,
-        assignedTo: {
-          select: { 
-            id: true, 
-            firstName: true, 
-            lastName: true, 
-            email: true, 
-            phone: true 
-          }
-        },
-        createdBy: {
-          select: { 
-            id: true, 
-            firstName: true, 
-            lastName: true 
-          }
-        },
-        products: {
-          include: {
-            product: {
-              select: { 
-                id: true, 
-                name: true, 
-                basePrice: true, 
-                unitOfMeasure: true 
-              }
-            }
-          }
-        },
-        followUps: {
-          orderBy: { scheduledAt: 'desc' }
-        },
-        notes: {
-          include: {
-            createdBy: {
-              select: { 
-                id: true, 
-                firstName: true, 
-                lastName: true 
-              }
-            }
-          },
-          orderBy: { createdAt: 'desc' }
-        },
-        quotations: {
-          include: { 
-            items: {
-              include: { product: true }
-            }
-          },
-          orderBy: { createdAt: 'desc' }
-        },
-        timeline: {
-          include: {
-            user: {
-              select: { 
-                id: true, 
-                firstName: true, 
-                lastName: true 
-              }
-            }
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 50
-        }
-      }
-    });
+    const leadsRows = await db.select({
+      id: schema.leads.id,
+      leadNumber: schema.leads.leadNumber,
+      title: schema.leads.title,
+      description: schema.leads.description,
+      status: schema.leads.status,
+      source: schema.leads.source,
+      estimateAmount: schema.leads.estimateAmount,
+      closeDate: schema.leads.closeDate,
+      customerId: schema.leads.customerId,
+      createdById: schema.leads.createdById,
+      assignedToId: schema.leads.assignedToId,
+      createdAt: schema.leads.createdAt,
+      updatedAt: schema.leads.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerEmail: schema.customers.email,
+      customerPhone: schema.customers.phone,
+      customerCompanyName: schema.customers.companyName,
+      customerAlternatePhone: schema.customers.alternatePhone,
+      customerAddress: schema.customers.address,
+      customerCity: schema.customers.city,
+      customerState: schema.customers.state,
+      customerPincode: schema.customers.pincode,
+      customerCountry: schema.customers.country,
+      customerGstNumber: schema.customers.gstNumber,
+      customerFacebookPsid: schema.customers.facebookPsid,
+      customerCreatedAt: schema.customers.createdAt,
+      customerUpdatedAt: schema.customers.updatedAt,
+      assignedToId_: schema.users.id,
+      assignedToFirstName: schema.users.firstName,
+      assignedToLastName: schema.users.lastName,
+      assignedToEmail: schema.users.email,
+      assignedToPhone: schema.users.phone
+    })
+    .from(schema.leads)
+    .leftJoin(schema.customers, eq(schema.leads.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.leads.assignedToId, schema.users.id))
+    .where(
+      and(
+        eq(schema.leads.id, id),
+        eq(schema.leads.isArchived, false)
+      )
+    )
+    .limit(1);
     
-    if (!lead) {
+    if (leadsRows.length === 0) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
+    
+    const rawLead = leadsRows[0];
+    const lead = {
+      id: rawLead.id, leadNumber: rawLead.leadNumber, title: rawLead.title,
+      description: rawLead.description, status: rawLead.status, source: rawLead.source,
+      estimateAmount: rawLead.estimateAmount, closeDate: rawLead.closeDate,
+      customerId: rawLead.customerId, createdById: rawLead.createdById,
+      assignedToId: rawLead.assignedToId, createdAt: rawLead.createdAt, updatedAt: rawLead.updatedAt,
+      customer: rawLead.customerId_ ? {
+        id: rawLead.customerId_, contactName: rawLead.customerContactName, email: rawLead.customerEmail,
+        phone: rawLead.customerPhone, companyName: rawLead.customerCompanyName,
+        alternatePhone: rawLead.customerAlternatePhone, address: rawLead.customerAddress,
+        city: rawLead.customerCity, state: rawLead.customerState, pincode: rawLead.customerPincode,
+        country: rawLead.customerCountry, gstNumber: rawLead.customerGstNumber,
+        facebookPsid: rawLead.customerFacebookPsid, createdAt: rawLead.customerCreatedAt, updatedAt: rawLead.customerUpdatedAt
+      } : null,
+      assignedTo: rawLead.assignedToId_ ? {
+        id: rawLead.assignedToId_, firstName: rawLead.assignedToFirstName,
+        lastName: rawLead.assignedToLastName, email: rawLead.assignedToEmail, phone: rawLead.assignedToPhone
+      } : null
+    };
     
     // Check permissions — employees can only view leads assigned to them
     if (req.user.role === 'EMPLOYEE' && lead.assignedToId !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
+
+    const creatorList = await db.select({
+      id: schema.users.id,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName
+    })
+    .from(schema.users)
+    .where(eq(schema.users.id, lead.createdById))
+    .limit(1);
+    lead.createdBy = creatorList[0] || null;
+
+    // Fetch products
+    const leadProductsRaw = await db.select({
+      id: schema.leadProducts.id,
+      leadId: schema.leadProducts.leadId,
+      productId: schema.leadProducts.productId,
+      quantity: schema.leadProducts.quantity,
+      notes: schema.leadProducts.notes,
+      productId_: schema.products.id,
+      productName: schema.products.name,
+      productBasePrice: schema.products.basePrice,
+      productUnitOfMeasure: schema.products.unitOfMeasure
+    })
+    .from(schema.leadProducts)
+    .leftJoin(schema.products, eq(schema.leadProducts.productId, schema.products.id))
+    .where(eq(schema.leadProducts.leadId, id));
+
+    const leadProductsRows = leadProductsRaw.map(r => ({
+      id: r.id, leadId: r.leadId, productId: r.productId, quantity: r.quantity, notes: r.notes,
+      product: r.productId_ ? { id: r.productId_, name: r.productName, basePrice: r.productBasePrice, unitOfMeasure: r.productUnitOfMeasure } : null
+    }));
+
+    // Fetch follow-ups
+    const followUpsRows = await db.select()
+      .from(schema.followUps)
+      .where(eq(schema.followUps.leadId, id))
+      .orderBy(desc(schema.followUps.scheduledAt));
+
+    // Fetch notes
+    const notesRaw = await db.select({
+      id: schema.notes.id,
+      content: schema.notes.content,
+      isVoiceNote: schema.notes.isVoiceNote,
+      voiceUrl: schema.notes.voiceUrl,
+      leadId: schema.notes.leadId,
+      createdById: schema.notes.createdById,
+      createdAt: schema.notes.createdAt,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.notes)
+    .leftJoin(schema.users, eq(schema.notes.createdById, schema.users.id))
+    .where(eq(schema.notes.leadId, id))
+    .orderBy(desc(schema.notes.createdAt));
+
+    const notesRows = notesRaw.map(r => ({
+      id: r.id, content: r.content, isVoiceNote: r.isVoiceNote, voiceUrl: r.voiceUrl,
+      leadId: r.leadId, createdById: r.createdById, createdAt: r.createdAt,
+      createdBy: r.createdByFirstName ? { firstName: r.createdByFirstName, lastName: r.createdByLastName } : null
+    }));
+
+    // Fetch quotations & items
+    const quotationsRows = await db.select()
+      .from(schema.quotations)
+      .where(eq(schema.quotations.leadId, id))
+      .orderBy(desc(schema.quotations.createdAt));
+
+    let quotationItemsMap = {};
+    if (quotationsRows.length > 0) {
+      const qIds = quotationsRows.map(q => q.id);
+      const qItems = await db.select({
+        id: schema.quotationItems.id,
+        quotationId: schema.quotationItems.quotationId,
+        productId: schema.quotationItems.productId,
+        description: schema.quotationItems.description,
+        quantity: schema.quotationItems.quantity,
+        unitPrice: schema.quotationItems.unitPrice,
+        discount: schema.quotationItems.discount,
+        taxRate: schema.quotationItems.taxRate,
+        totalPrice: schema.quotationItems.totalPrice,
+        productId_: schema.products.id,
+        productName: schema.products.name,
+        productSku: schema.products.sku,
+        productUnitOfMeasure: schema.products.unitOfMeasure,
+        productBasePrice: schema.products.basePrice
+      })
+      .from(schema.quotationItems)
+      .leftJoin(schema.products, eq(schema.quotationItems.productId, schema.products.id))
+      .where(inArray(schema.quotationItems.quotationId, qIds));
+
+      for (const item of qItems) {
+        const mapped = {
+          id: item.id, quotationId: item.quotationId, productId: item.productId,
+          description: item.description, quantity: item.quantity, unitPrice: item.unitPrice,
+          discount: item.discount, taxRate: item.taxRate, totalPrice: item.totalPrice,
+          product: item.productId_ ? { id: item.productId_, name: item.productName, sku: item.productSku, unitOfMeasure: item.productUnitOfMeasure, basePrice: item.productBasePrice } : null
+        };
+        if (!quotationItemsMap[item.quotationId]) quotationItemsMap[item.quotationId] = [];
+        quotationItemsMap[item.quotationId].push(mapped);
+      }
+    }
+
+    const formattedQuotes = quotationsRows.map(q => ({
+      ...q,
+      items: quotationItemsMap[q.id] || []
+    }));
+
+    // Fetch timeline
+    const timelineRaw = await db.select({
+      id: schema.leadTimeline.id,
+      leadId: schema.leadTimeline.leadId,
+      action: schema.leadTimeline.action,
+      description: schema.leadTimeline.description,
+      oldValue: schema.leadTimeline.oldValue,
+      newValue: schema.leadTimeline.newValue,
+      performedBy: schema.leadTimeline.performedBy,
+      createdAt: schema.leadTimeline.createdAt,
+      userFirstName: schema.users.firstName,
+      userLastName: schema.users.lastName
+    })
+    .from(schema.leadTimeline)
+    .leftJoin(schema.users, eq(schema.leadTimeline.performedBy, schema.users.id))
+    .where(eq(schema.leadTimeline.leadId, id))
+    .orderBy(desc(schema.leadTimeline.createdAt))
+    .limit(50);
+
+    const timelineRows = timelineRaw.map(r => ({
+      id: r.id, leadId: r.leadId, action: r.action, description: r.description,
+      oldValue: r.oldValue, newValue: r.newValue, performedBy: r.performedBy, createdAt: r.createdAt,
+      user: r.userFirstName ? { firstName: r.userFirstName, lastName: r.userLastName } : null
+    }));
+
+    const leadDetails = {
+      ...lead,
+      products: leadProductsRows,
+      followUps: followUpsRows,
+      notes: notesRows,
+      quotations: formattedQuotes,
+      timeline: timelineRows
+    };
     
-    res.json({ success: true, data: lead });
+    res.json({ success: true, data: leadDetails });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -192,30 +403,36 @@ exports.checkDuplicate = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Phone or email required' });
     }
     
-    const where = {};
-    if (phone) where.phone = phone;
-    if (email) where.email = email;
+    const conditions = [];
+    if (phone) conditions.push(eq(schema.customers.phone, phone));
+    if (email) conditions.push(eq(schema.customers.email, email));
     
-    const existing = await prisma.customer.findFirst({
-      where,
-      include: {
-        leads: {
-          select: { 
-            id: true, 
-            status: true, 
-            createdAt: true 
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 1
-        }
-      }
-    });
+    const existingList = await db.select()
+      .from(schema.customers)
+      .where(conditions.length > 0 ? or(...conditions) : undefined)
+      .limit(1);
     
+    const existing = existingList[0];
+
     if (existing && existing.id !== excludeId) {
+      // Get the latest lead for this customer
+      const latestLeads = await db.select({
+        id: schema.leads.id,
+        status: schema.leads.status,
+        createdAt: schema.leads.createdAt
+      })
+      .from(schema.leads)
+      .where(eq(schema.leads.customerId, existing.id))
+      .orderBy(desc(schema.leads.createdAt))
+      .limit(1);
+
       return res.status(409).json({
         success: false,
         message: 'Customer already exists',
-        data: existing
+        data: {
+          ...existing,
+          leads: latestLeads
+        }
       });
     }
     
@@ -229,28 +446,12 @@ exports.checkDuplicate = async (req, res) => {
 exports.createLead = async (req, res) => {
   try {
     const {
-      title,
-      description,
-      status,
-      source,
-      estimateAmount,
-      closeDate,
-      // Customer info
-      customerName,
-      customerEmail,
-      customerPhone,
-      customerCompany,
-      customerAddress,
-      customerCity,
-      customerState,
-      customerPincode,
-      // Products
-      products,
-      // Assignment
-      assignedToId
+      title, description, status, source, estimateAmount, closeDate,
+      customerName, customerEmail, customerPhone, customerCompany,
+      customerAddress, customerCity, customerState, customerPincode,
+      products, assignedToId
     } = req.body;
     
-    // Validate assignment permissions for employees
     let finalAssignedToId = assignedToId || req.user.id;
     if (req.user.role === 'EMPLOYEE' && finalAssignedToId !== req.user.id) {
       const validUserIds = await getSubordinateIds(req.user.id, true);
@@ -262,114 +463,134 @@ exports.createLead = async (req, res) => {
     }
 
     // Check for duplicate customer
-    const existingCustomer = await prisma.customer.findFirst({
-      where: {
-        OR: [
-          { phone: customerPhone },
-          { email: customerEmail }
-        ]
-      }
-    });
+    const conditions = [];
+    if (customerPhone) conditions.push(eq(schema.customers.phone, customerPhone));
+    if (customerEmail) conditions.push(eq(schema.customers.email, customerEmail));
+
+    const existingCustList = await db.select()
+      .from(schema.customers)
+      .where(conditions.length > 0 ? or(...conditions) : undefined)
+      .limit(1);
+
+    const existingCustomer = existingCustList[0];
     
     let customerId;
     let isDuplicate = false;
     
     if (existingCustomer) {
-      // Use existing customer
       customerId = existingCustomer.id;
       isDuplicate = true;
     } else {
-      // Create new customer
-      const newCustomer = await prisma.customer.create({
-        data: {
-          contactName: customerName,
-          email: customerEmail,
-          phone: customerPhone,
-          companyName: customerCompany,
-          address: customerAddress,
-          city: customerCity,
-          state: customerState,
-          pincode: customerPincode
-        }
+      customerId = randomUUID();
+      await db.insert(schema.customers).values({
+        id: customerId,
+        contactName: customerName,
+        email: customerEmail || null,
+        phone: customerPhone,
+        companyName: customerCompany || null,
+        address: customerAddress || null,
+        city: customerCity || null,
+        state: customerState || null,
+        pincode: customerPincode || null,
+        createdAt: new Date(),
+        updatedAt: new Date()
       });
-      customerId = newCustomer.id;
     }
     
-    // Generate lead number — atomic counter prevents collisions under concurrent requests
-    // On first use, sync the counter to current max to avoid clashing with existing records
-    const existingMax = await prisma.lead.count();
+    // Generate lead number
+    const countResult = await db.select({ count: sql`count(*)` }).from(schema.leads);
+    const existingMax = Number(countResult[0]?.count || 0);
     await syncCounterToMax('LEAD', existingMax);
     const nextNum = await incrementAndGet('LEAD');
     const leadNumber = `L-${String(nextNum).padStart(5, '0')}`;
     
-    // Create lead
-    const lead = await prisma.lead.create({
-      data: {
-        leadNumber,
-        title,
-        description,
-        status: status || 'NEW',
-        source: source || 'OTHER',
-        estimateAmount: estimateAmount ? parseFloat(estimateAmount) : null,
-        closeDate: closeDate ? new Date(closeDate) : null,
-        customerId,
-        createdById: req.user.id,
-        // Employees always own their leads; admins can assign to others
-        assignedToId: req.user.role === 'ADMIN' ? (assignedToId || req.user.id) : finalAssignedToId,
-        // Add products if provided
-        products: products?.length ? {
-          create: products.map(p => ({
-            productId: p.productId,
-            quantity: parseInt(p.quantity) || 1,
-            notes: p.notes
-          }))
-        } : undefined
-      },
-      include: {
-        customer: true,
-        assignedTo: {
-          select: { 
-            id: true, 
-            firstName: true, 
-            lastName: true, 
-            email: true 
-          }
-        }
+    const leadId = randomUUID();
+
+    const leadData = {
+      id: leadId,
+      leadNumber,
+      title,
+      description: description || null,
+      status: status || 'NEW',
+      source: source || 'OTHER',
+      estimateAmount: estimateAmount ? parseFloat(estimateAmount).toFixed(2) : null,
+      closeDate: closeDate ? new Date(closeDate) : null,
+      customerId,
+      createdById: req.user.id,
+      assignedToId: req.user.role === 'ADMIN' ? (assignedToId || req.user.id) : finalAssignedToId,
+      isArchived: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const finalLead = await db.transaction(async (tx) => {
+      await tx.insert(schema.leads).values(leadData);
+
+      if (products && products.length > 0) {
+        const leadProds = products.map(p => ({
+          id: randomUUID(),
+          leadId: leadId,
+          productId: p.productId,
+          quantity: parseInt(p.quantity) || 1,
+          notes: p.notes || null
+        }));
+        await tx.insert(schema.leadProducts).values(leadProds);
       }
-    });
-    
-    // Create timeline entry
-    await prisma.leadTimeline.create({
-      data: {
-        leadId: lead.id,
+
+      await tx.insert(schema.leadTimeline).values({
+        id: randomUUID(),
+        leadId: leadId,
         action: 'Lead Created',
         description: isDuplicate ? 'Lead created for existing customer' : 'New lead and customer created',
-        performedBy: req.user.id
-      }
+        performedBy: req.user.id,
+        createdAt: new Date()
+      });
+
+      return leadData;
     });
+
+    const customerObj = existingCustomer || await db.select().from(schema.customers).where(eq(schema.customers.id, customerId)).limit(1).then(r => r[0]);
+    const assignedToUserObj = await db.select({
+      id: schema.users.id,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName,
+      email: schema.users.email
+    })
+    .from(schema.users)
+    .where(eq(schema.users.id, leadData.assignedToId))
+    .limit(1)
+    .then(r => r[0]);
+
+    const leadResult = {
+      ...finalLead,
+      customer: customerObj,
+      assignedTo: assignedToUserObj
+    };
     
-    // Emit real-time notification if assigned to someone else
+    // Emit notifications
     const io = req.app.get('io');
     if (assignedToId && assignedToId !== req.user.id) {
-      io.emit('notification', {
-        type: 'LEAD_ASSIGNED',
-        title: 'New Lead Assigned',
-        body: `Lead ${lead.leadNumber} has been assigned to you`,
-        entityType: 'lead',
-        entityId: lead.id,
-        targetUserId: assignedToId
-      });
-      
-      // Persist notification
-      await prisma.notification.create({
-        data: {
-          userId: assignedToId,
+      if (io) {
+        io.emit('notification', {
           type: 'LEAD_ASSIGNED',
           title: 'New Lead Assigned',
-          body: `Lead ${lead.leadNumber} has been assigned to you`,
+          body: `Lead ${leadResult.leadNumber} has been assigned to you`,
           entityType: 'lead',
-          entityId: lead.id
-        }
+          entityId: leadResult.id,
+          targetUserId: assignedToId
+        });
+      }
+      
+      await db.insert(schema.notifications).values({
+        id: randomUUID(),
+        userId: assignedToId,
+        type: 'LEAD_ASSIGNED',
+        title: 'New Lead Assigned',
+        body: `Lead ${leadResult.leadNumber} has been assigned to you`,
+        entityType: 'lead',
+        entityId: leadResult.id,
+        isRead: false,
+        createdAt: new Date()
       });
     }
     
@@ -381,7 +602,7 @@ exports.createLead = async (req, res) => {
     res.status(201).json({
       success: true,
       message: isDuplicate ? 'Lead created for existing customer' : 'Lead created successfully',
-      data: lead,
+      data: leadResult,
       isDuplicate
     });
   } catch (error) {
@@ -395,7 +616,8 @@ exports.updateLead = async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
     
-    const lead = await prisma.lead.findUnique({ where: { id, isArchived: false } });
+    const leadList = await db.select().from(schema.leads).where(and(eq(schema.leads.id, id), eq(schema.leads.isArchived, false))).limit(1);
+    const lead = leadList[0];
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
@@ -405,64 +627,108 @@ exports.updateLead = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
-    // Track status change for timeline and snapshots
     const oldStatus = lead.status;
     const newStatus = updateData.status;
     
-    // Time-travel snapshot: capture manager at the moment of lead closure
+    // Closure snapshot logic
     const closingStatuses = ['WON', 'LOST'];
     const isClosing = newStatus && closingStatuses.includes(newStatus) && !closingStatuses.includes(oldStatus);
-    let snapshotManagerId;
+    let snapshotManagerId = null;
     if (isClosing && lead.assignedToId) {
-      const assignee = await prisma.user.findUnique({
-        where: { id: lead.assignedToId },
-        select: { managerId: true }
-      });
-      snapshotManagerId = assignee?.managerId || null;
+      const assigneeList = await db.select({ managerId: schema.users.managerId })
+        .from(schema.users)
+        .where(eq(schema.users.id, lead.assignedToId))
+        .limit(1);
+      snapshotManagerId = assigneeList[0]?.managerId || null;
     }
 
-    const updated = await prisma.lead.update({
-      where: { id },
-      data: {
-        ...updateData,
-        estimateAmount: updateData.estimateAmount ? parseFloat(updateData.estimateAmount) : undefined,
-        closeDate: updateData.closeDate ? new Date(updateData.closeDate) : undefined,
-        ...(isClosing && { snapshotManagerId })
-      },
-      include: {
-        customer: true,
-        assignedTo: {
-          select: { 
-            id: true, 
-            firstName: true, 
-            lastName: true 
-          }
-        }
-      }
-    });
+    const updateFields = {
+      updatedAt: new Date()
+    };
     
-    // Create timeline entry if status changed
+    for (const key of Object.keys(updateData)) {
+      if (updateData[key] !== undefined) {
+        updateFields[key] = updateData[key];
+      }
+    }
+
+    if (updateData.estimateAmount !== undefined) {
+      updateFields.estimateAmount = updateData.estimateAmount ? parseFloat(updateData.estimateAmount).toFixed(2) : null;
+    }
+    if (updateData.closeDate !== undefined) {
+      updateFields.closeDate = updateData.closeDate ? new Date(updateData.closeDate) : null;
+    }
+    if (isClosing) {
+      updateFields.snapshotManagerId = snapshotManagerId;
+    }
+
+    await db.update(schema.leads)
+      .set(updateFields)
+      .where(eq(schema.leads.id, id));
+
+    // Fetch updated lead details
+    const updatedLeadList = await db.select({
+      id: schema.leads.id,
+      leadNumber: schema.leads.leadNumber,
+      title: schema.leads.title,
+      description: schema.leads.description,
+      status: schema.leads.status,
+      source: schema.leads.source,
+      estimateAmount: schema.leads.estimateAmount,
+      closeDate: schema.leads.closeDate,
+      customerId: schema.leads.customerId,
+      assignedToId: schema.leads.assignedToId,
+      createdAt: schema.leads.createdAt,
+      updatedAt: schema.leads.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerEmail: schema.customers.email,
+      customerPhone: schema.customers.phone,
+      customerCompanyName: schema.customers.companyName,
+      assignedToId_: schema.users.id,
+      assignedToFirstName: schema.users.firstName,
+      assignedToLastName: schema.users.lastName
+    })
+    .from(schema.leads)
+    .leftJoin(schema.customers, eq(schema.leads.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.leads.assignedToId, schema.users.id))
+    .where(eq(schema.leads.id, id))
+    .limit(1);
+
+    const rawUpdated = updatedLeadList[0];
+    const updated = rawUpdated ? {
+      id: rawUpdated.id, leadNumber: rawUpdated.leadNumber, title: rawUpdated.title,
+      description: rawUpdated.description, status: rawUpdated.status, source: rawUpdated.source,
+      estimateAmount: rawUpdated.estimateAmount, closeDate: rawUpdated.closeDate,
+      customerId: rawUpdated.customerId, assignedToId: rawUpdated.assignedToId,
+      createdAt: rawUpdated.createdAt, updatedAt: rawUpdated.updatedAt,
+      customer: rawUpdated.customerId_ ? { id: rawUpdated.customerId_, contactName: rawUpdated.customerContactName, email: rawUpdated.customerEmail, phone: rawUpdated.customerPhone, companyName: rawUpdated.customerCompanyName } : null,
+      assignedTo: rawUpdated.assignedToId_ ? { id: rawUpdated.assignedToId_, firstName: rawUpdated.assignedToFirstName, lastName: rawUpdated.assignedToLastName } : null
+    } : null;
+
+    // Status changed timeline note
     if (newStatus && newStatus !== oldStatus) {
-      await prisma.leadTimeline.create({
-        data: {
-          leadId: id,
-          action: 'Status Changed',
-          oldValue: oldStatus,
-          newValue: newStatus,
-          performedBy: req.user.id
-        }
+      await db.insert(schema.leadTimeline).values({
+        id: randomUUID(),
+        leadId: id,
+        action: 'Status Changed',
+        oldValue: oldStatus,
+        newValue: newStatus,
+        performedBy: req.user.id,
+        createdAt: new Date()
       });
       
-      // Emit notification
       const io = req.app.get('io');
-      io.emit('notification', {
-        type: 'LEAD_STATUS_CHANGED',
-        title: 'Lead Status Updated',
-        body: `Lead ${lead.leadNumber} status changed to ${newStatus}`,
-        entityType: 'lead',
-        entityId: id,
-        targetUserId: lead.assignedToId
-      });
+      if (io) {
+        io.emit('notification', {
+          type: 'LEAD_STATUS_CHANGED',
+          title: 'Lead Status Updated',
+          body: `Lead ${lead.leadNumber} status changed to ${newStatus}`,
+          entityType: 'lead',
+          entityId: id,
+          targetUserId: lead.assignedToId
+        });
+      }
     }
     
     const ioRefresh = req.app.get('io');
@@ -471,8 +737,6 @@ exports.updateLead = async (req, res) => {
       ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    // If a lead just moved to WON, immediately refresh target achievements
-    // for the assignee. This is the primary real-time trigger for leadsAchieved.
     if (newStatus === 'WON' && newStatus !== oldStatus) {
       triggerRefreshForEmployee(updated.assignedToId, ioRefresh);
     }
@@ -488,13 +752,16 @@ exports.deleteLead = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const lead = await prisma.lead.findUnique({ where: { id } });
-    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+    const leadList = await db.select().from(schema.leads).where(eq(schema.leads.id, id)).limit(1);
+    if (leadList.length === 0) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    await prisma.lead.update({
-      where: { id },
-      data: { isArchived: true, deletedAt: new Date() }
-    });
+    await db.update(schema.leads)
+      .set({
+        isArchived: true,
+        deletedAt: new Date(),
+        updatedAt: new Date()
+      })
+      .where(eq(schema.leads.id, id));
 
     res.json({ success: true, message: 'Lead archived successfully' });
   } catch (error) {
@@ -508,12 +775,13 @@ exports.assignLead = async (req, res) => {
     const { id } = req.params;
     const { assignedToId } = req.body;
     
-    const lead = await prisma.lead.findUnique({ where: { id } });
+    const leadList = await db.select().from(schema.leads).where(eq(schema.leads.id, id)).limit(1);
+    const lead = leadList[0];
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
     
-    // Validate assignment permissions for employees
+    // Validate assignment permissions
     if (req.user.role === 'EMPLOYEE') {
       const validUserIds = await getSubordinateIds(req.user.id, true);
       validUserIds.push(req.user.id);
@@ -525,53 +793,69 @@ exports.assignLead = async (req, res) => {
     
     const oldAssignee = lead.assignedToId;
     
-    const updated = await prisma.lead.update({
-      where: { id },
-      data: { assignedToId },
-      include: {
-        assignedTo: {
-          select: { 
-            id: true, 
-            firstName: true, 
-            lastName: true, 
-            email: true 
-          }
-        },
-        customer: true
-      }
+    await db.update(schema.leads)
+      .set({
+        assignedToId,
+        updatedAt: new Date()
+      })
+      .where(eq(schema.leads.id, id));
+
+    const updatedLeadList = await db.select({
+      id: schema.leads.id,
+      leadNumber: schema.leads.leadNumber,
+      assignedToId_: schema.users.id,
+      assignedToFirstName: schema.users.firstName,
+      assignedToLastName: schema.users.lastName,
+      assignedToEmail: schema.users.email,
+      customerContactName: schema.customers.contactName
+    })
+    .from(schema.leads)
+    .leftJoin(schema.customers, eq(schema.leads.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.leads.assignedToId, schema.users.id))
+    .where(eq(schema.leads.id, id))
+    .limit(1);
+
+    const rawU = updatedLeadList[0];
+    const updated = rawU ? {
+      id: rawU.id, leadNumber: rawU.leadNumber,
+      assignedTo: rawU.assignedToId_ ? { id: rawU.assignedToId_, firstName: rawU.assignedToFirstName, lastName: rawU.assignedToLastName, email: rawU.assignedToEmail } : null,
+      customer: { contactName: rawU.customerContactName }
+    } : null;
+    
+    // Timeline update
+    await db.insert(schema.leadTimeline).values({
+      id: randomUUID(),
+      leadId: id,
+      action: 'Lead Reassigned',
+      description: `Assigned to ${updated.assignedTo.firstName} ${updated.assignedTo.lastName}`,
+      performedBy: req.user.id,
+      createdAt: new Date()
     });
     
-    // Create timeline entry
-    await prisma.leadTimeline.create({
-      data: {
-        leadId: id,
-        action: 'Lead Reassigned',
-        description: `Assigned to ${updated.assignedTo.firstName} ${updated.assignedTo.lastName}`,
-        performedBy: req.user.id
-      }
-    });
-    
-    // Notify new assignee
+    // Notify assignee
     const io = req.app.get('io');
     if (assignedToId !== oldAssignee) {
-      io.emit('notification', {
+      if (io) {
+        io.emit('notification', {
+          type: 'LEAD_ASSIGNED',
+          title: 'Lead Assigned to You',
+          body: `Lead ${lead.leadNumber} - ${updated.customer.contactName}`,
+          entityType: 'lead',
+          entityId: id,
+          targetUserId: assignedToId
+        });
+      }
+      
+      await db.insert(schema.notifications).values({
+        id: randomUUID(),
+        userId: assignedToId,
         type: 'LEAD_ASSIGNED',
         title: 'Lead Assigned to You',
         body: `Lead ${lead.leadNumber} - ${updated.customer.contactName}`,
         entityType: 'lead',
         entityId: id,
-        targetUserId: assignedToId
-      });
-      
-      await prisma.notification.create({
-        data: {
-          userId: assignedToId,
-          type: 'LEAD_ASSIGNED',
-          title: 'Lead Assigned to You',
-          body: `Lead ${lead.leadNumber} - ${updated.customer.contactName}`,
-          entityType: 'lead',
-          entityId: id
-        }
+        isRead: false,
+        createdAt: new Date()
       });
     }
     
@@ -592,29 +876,54 @@ exports.addNote = async (req, res) => {
     const { id } = req.params;
     const { content } = req.body;
 
-    const lead = await prisma.lead.findUnique({ where: { id } });
-    if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+    const leadList = await db.select().from(schema.leads).where(eq(schema.leads.id, id)).limit(1);
+    if (leadList.length === 0) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-    // Insert Note
-    const note = await prisma.note.create({
-      data: {
-        content,
-        leadId: id,
-        createdById: req.user.id
-      },
-      include: {
-        createdBy: { select: { firstName: true, lastName: true } }
-      }
+    const noteId = randomUUID();
+    const isVoice = content.startsWith('/uploads');
+    
+    await db.insert(schema.notes).values({
+      id: noteId,
+      content,
+      isVoiceNote: isVoice,
+      voiceUrl: isVoice ? content : null,
+      leadId: id,
+      createdById: req.user.id,
+      createdAt: new Date()
     });
 
-    // Also inject directly into timeline so it updates the overall view
-    await prisma.leadTimeline.create({
-      data: {
-        leadId: id,
-        action: 'Note Added',
-        description: content.startsWith('/uploads') ? 'Recorded a voice message' : content.slice(0, 50),
-        performedBy: req.user.id
-      }
+    const noteRaw = await db.select({
+      id: schema.notes.id,
+      content: schema.notes.content,
+      isVoiceNote: schema.notes.isVoiceNote,
+      voiceUrl: schema.notes.voiceUrl,
+      leadId: schema.notes.leadId,
+      createdById: schema.notes.createdById,
+      createdAt: schema.notes.createdAt,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.notes)
+    .leftJoin(schema.users, eq(schema.notes.createdById, schema.users.id))
+    .where(eq(schema.notes.id, noteId))
+    .limit(1)
+    .then(r => r[0]);
+
+    const note = noteRaw ? {
+      id: noteRaw.id, content: noteRaw.content, isVoiceNote: noteRaw.isVoiceNote,
+      voiceUrl: noteRaw.voiceUrl, leadId: noteRaw.leadId, createdById: noteRaw.createdById,
+      createdAt: noteRaw.createdAt,
+      createdBy: noteRaw.createdByFirstName ? { firstName: noteRaw.createdByFirstName, lastName: noteRaw.createdByLastName } : null
+    } : null;
+
+    // Update timeline
+    await db.insert(schema.leadTimeline).values({
+      id: randomUUID(),
+      leadId: id,
+      action: 'Note Added',
+      description: isVoice ? 'Recorded a voice message' : content.slice(0, 50),
+      performedBy: req.user.id,
+      createdAt: new Date()
     });
 
     res.status(201).json({ success: true, data: note });
@@ -629,26 +938,31 @@ exports.addFollowUp = async (req, res) => {
     const { id } = req.params;
     const { type, description, scheduledAt, assignedToId } = req.body;
 
-    const followUp = await prisma.followUp.create({
-      data: {
-        type,
-        description,
-        scheduledAt: new Date(scheduledAt),
-        leadId: id,
-        assignedToId: assignedToId || req.user.id
-      }
+    const followUpId = randomUUID();
+    const followUpData = {
+      id: followUpId,
+      type,
+      description,
+      scheduledAt: new Date(scheduledAt),
+      leadId: id,
+      assignedToId: assignedToId || req.user.id,
+      status: 'SCHEDULED',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    await db.insert(schema.followUps).values(followUpData);
+
+    await db.insert(schema.leadTimeline).values({
+      id: randomUUID(),
+      leadId: id,
+      action: 'Follow-up Scheduled',
+      description: `${type}: ${description} (For ${new Date(scheduledAt).toLocaleDateString()})`,
+      performedBy: req.user.id,
+      createdAt: new Date()
     });
 
-    await prisma.leadTimeline.create({
-      data: {
-        leadId: id,
-        action: 'Follow-up Scheduled',
-        description: `${type}: ${description} (For ${new Date(scheduledAt).toLocaleDateString()})`,
-        performedBy: req.user.id
-      }
-    });
-
-    res.status(201).json({ success: true, data: followUp });
+    res.status(201).json({ success: true, data: followUpData });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -660,16 +974,19 @@ exports.logInteraction = async (req, res) => {
     const { id } = req.params;
     const { channel, message } = req.body;
 
-    const timeline = await prisma.leadTimeline.create({
-      data: {
-        leadId: id,
-        action: `${channel} Sent`,
-        description: message.substring(0, 200),
-        performedBy: req.user.id
-      }
-    });
+    const timelineId = randomUUID();
+    const timelineData = {
+      id: timelineId,
+      leadId: id,
+      action: `${channel} Sent`,
+      description: message.substring(0, 200),
+      performedBy: req.user.id,
+      createdAt: new Date()
+    };
 
-    res.status(201).json({ success: true, data: timeline });
+    await db.insert(schema.leadTimeline).values(timelineData);
+
+    res.status(201).json({ success: true, data: timelineData });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -681,23 +998,43 @@ exports.addLeadProduct = async (req, res) => {
     const { id } = req.params;
     const { productId, quantity, notes } = req.body;
 
-    const leadProduct = await prisma.leadProduct.create({
-      data: {
-        leadId: id,
-        productId,
-        quantity: parseInt(quantity) || 1,
-        notes
-      },
-      include: { product: true }
+    const leadProductId = randomUUID();
+    await db.insert(schema.leadProducts).values({
+      id: leadProductId,
+      leadId: id,
+      productId,
+      quantity: parseInt(quantity) || 1,
+      notes: notes || null
     });
 
-    await prisma.leadTimeline.create({
-      data: {
-        leadId: id,
-        action: 'Product Added',
-        description: `Added ${quantity}x ${leadProduct.product.name}`,
-        performedBy: req.user.id
-      }
+    const leadProductRaw = await db.select({
+      id: schema.leadProducts.id,
+      leadId: schema.leadProducts.leadId,
+      productId: schema.leadProducts.productId,
+      quantity: schema.leadProducts.quantity,
+      notes: schema.leadProducts.notes,
+      productId_: schema.products.id,
+      productName: schema.products.name
+    })
+    .from(schema.leadProducts)
+    .leftJoin(schema.products, eq(schema.leadProducts.productId, schema.products.id))
+    .where(eq(schema.leadProducts.id, leadProductId))
+    .limit(1)
+    .then(r => r[0]);
+
+    const leadProduct = leadProductRaw ? {
+      id: leadProductRaw.id, leadId: leadProductRaw.leadId, productId: leadProductRaw.productId,
+      quantity: leadProductRaw.quantity, notes: leadProductRaw.notes,
+      product: leadProductRaw.productId_ ? { id: leadProductRaw.productId_, name: leadProductRaw.productName } : null
+    } : null;
+
+    await db.insert(schema.leadTimeline).values({
+      id: randomUUID(),
+      leadId: id,
+      action: 'Product Added',
+      description: `Added ${quantity}x ${leadProduct.product.name}`,
+      performedBy: req.user.id,
+      createdAt: new Date()
     });
 
     res.status(201).json({ success: true, data: leadProduct });
@@ -707,12 +1044,9 @@ exports.addLeadProduct = async (req, res) => {
 };
 
 // Bulk Import Leads from CSV
-// - Processes rows in batches of 50 (each batch is a single transaction)
-// - Detects duplicate phone/email per row and flags them instead of creating duplicates
-// - Returns a detailed per-row error report on failure
 exports.importLeads = async (req, res) => {
   try {
-    const { rows } = req.body; // array of { title, phone, email, source, estimateAmount, description, companyName }
+    const { rows } = req.body;
     if (!Array.isArray(rows) || rows.length === 0) {
       return res.status(400).json({ success: false, message: 'No rows provided' });
     }
@@ -720,11 +1054,11 @@ exports.importLeads = async (req, res) => {
     const BATCH_SIZE = 50;
     let imported = 0;
     let skipped = 0;
-    const failedRows = []; // Detailed per-row failure info
-    const duplicateRows = []; // Rows that matched an existing customer
+    const failedRows = [];
+    const duplicateRows = [];
 
-    // Sync counter once before the import to avoid repeated DB calls
-    const existingMax = await prisma.lead.count();
+    const totalRes = await db.select({ count: sql`count(*)` }).from(schema.leads);
+    const existingMax = Number(totalRes[0]?.count || 0);
     await syncCounterToMax('LEAD', existingMax);
 
     // Process in batches
@@ -732,9 +1066,9 @@ exports.importLeads = async (req, res) => {
       const batch = rows.slice(batchStart, batchStart + BATCH_SIZE);
 
       try {
-        await prisma.$transaction(async (tx) => {
+        await db.transaction(async (tx) => {
           for (let i = 0; i < batch.length; i++) {
-            const rowIndex = batchStart + i + 1; // 1-based row number for error reporting
+            const rowIndex = batchStart + i + 1;
             const row = batch[i];
             const { title, phone, email, source, estimateAmount, description, companyName } = row;
 
@@ -744,54 +1078,58 @@ exports.importLeads = async (req, res) => {
               continue;
             }
 
-            // Duplicate detection — check by phone AND email
-            const existingCustomer = await tx.customer.findFirst({
-              where: {
-                OR: [
-                  { phone: String(phone) },
-                  ...(email ? [{ email: String(email) }] : [])
-                ]
-              }
-            });
+            // Duplicate customer check
+            const customerConditions = [eq(schema.customers.phone, String(phone))];
+            if (email) customerConditions.push(eq(schema.customers.email, String(email)));
+
+            const existingList = await tx.select()
+              .from(schema.customers)
+              .where(or(...customerConditions))
+              .limit(1);
+
+            const existingCustomer = existingList[0];
 
             let customerId;
             if (existingCustomer) {
               customerId = existingCustomer.id;
               duplicateRows.push({ row: rowIndex, phone, email, message: 'Linked to existing customer' });
             } else {
-              const newCustomer = await tx.customer.create({
-                data: {
-                  contactName: String(title),
-                  phone: String(phone),
-                  email: email ? String(email) : null,
-                  companyName: companyName ? String(companyName) : null,
-                }
+              customerId = randomUUID();
+              await tx.insert(schema.customers).values({
+                id: customerId,
+                contactName: String(title),
+                phone: String(phone),
+                email: email ? String(email) : null,
+                companyName: companyName ? String(companyName) : null,
+                createdAt: new Date(),
+                updatedAt: new Date()
               });
-              customerId = newCustomer.id;
             }
 
-            // Atomic lead number — each row gets a unique number
             const nextNum = await incrementAndGet('LEAD');
             const leadNumber = `L-${String(nextNum).padStart(5, '0')}`;
 
-            await tx.lead.create({
-              data: {
-                leadNumber,
-                title: String(title),
-                description: description ? String(description) : null,
-                status: 'NEW',
-                source: source ? String(source).toUpperCase() : 'OTHER',
-                estimateAmount: estimateAmount ? parseFloat(estimateAmount) : null,
-                customerId,
-                createdById: req.user.id,
-                assignedToId: req.user.id,
-              }
+            const leadId = randomUUID();
+            await tx.insert(schema.leads).values({
+              id: leadId,
+              leadNumber,
+              title: String(title),
+              description: description ? String(description) : null,
+              status: 'NEW',
+              source: source ? String(source).toUpperCase() : 'OTHER',
+              estimateAmount: estimateAmount ? parseFloat(estimateAmount).toFixed(2) : null,
+              customerId,
+              createdById: req.user.id,
+              assignedToId: req.user.id,
+              isArchived: false,
+              createdAt: new Date(),
+              updatedAt: new Date()
             });
+
             imported++;
           }
         });
       } catch (batchError) {
-        // If a batch fails, record all rows in that batch as failed
         for (let i = 0; i < batch.length; i++) {
           const rowIndex = batchStart + i + 1;
           failedRows.push({ row: rowIndex, reason: batchError.message });
@@ -805,7 +1143,7 @@ exports.importLeads = async (req, res) => {
       imported,
       skipped,
       duplicatesLinked: duplicateRows.length,
-      failedRows: failedRows.slice(0, 20), // Return up to 20 detailed errors
+      failedRows: failedRows.slice(0, 20),
       duplicateRows: duplicateRows.slice(0, 10)
     });
   } catch (error) {
@@ -817,15 +1155,18 @@ exports.importLeads = async (req, res) => {
 exports.removeLeadProduct = async (req, res) => {
   try {
     const { id, productId } = req.params;
-    await prisma.leadProduct.delete({ where: { id: productId } });
-    await prisma.leadTimeline.create({
-      data: {
-        leadId: id,
-        action: 'Product Removed',
-        description: 'Removed an interested product from this lead',
-        performedBy: req.user.id
-      }
+    
+    await db.delete(schema.leadProducts).where(eq(schema.leadProducts.id, productId));
+    
+    await db.insert(schema.leadTimeline).values({
+      id: randomUUID(),
+      leadId: id,
+      action: 'Product Removed',
+      description: 'Removed an interested product from this lead',
+      performedBy: req.user.id,
+      createdAt: new Date()
     });
+
     res.json({ success: true, message: 'Product removed' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -838,16 +1179,19 @@ exports.addTimelineEvent = async (req, res) => {
     const { id } = req.params;
     const { action, description } = req.body;
 
-    const timeline = await prisma.leadTimeline.create({
-      data: {
-        leadId: id,
-        action,
-        description,
-        performedBy: req.user.id
-      }
-    });
+    const timelineId = randomUUID();
+    const timelineData = {
+      id: timelineId,
+      leadId: id,
+      action,
+      description: description || null,
+      performedBy: req.user.id,
+      createdAt: new Date()
+    };
 
-    res.status(201).json({ success: true, data: timeline });
+    await db.insert(schema.leadTimeline).values(timelineData);
+
+    res.status(201).json({ success: true, data: timelineData });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

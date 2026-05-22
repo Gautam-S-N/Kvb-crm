@@ -1,12 +1,7 @@
-/**
- * quotationNumber.controller.js
- * ─────────────────────────────────────────────────────────────────────────────
- * Uses raw SQL (prisma.$queryRawUnsafe / $executeRawUnsafe) so that the new
- * tables (quotation_counters, quotation_reservations) work WITHOUT needing to
- * regenerate the Prisma client.
- */
-const prisma = require('../utils/db');
-const { v4: uuidv4 } = require('uuid');
+const { eq, and, or, inArray, sql } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
+const { randomUUID } = require('crypto');
 const {
   createRevision,
   getNextRevisionMeta,
@@ -26,9 +21,9 @@ const RESERVATION_TTL_MINUTES = 10;
 
 // ─── Formatting Helpers ────────────────────────────────────────────────────────
 const getFormatSettings = async () => {
-  const rows = await prisma.setting.findMany({
-    where: { key: { in: ['QTN_COMPANY_CODE', 'QTN_DATE_FORMAT', 'QTN_PRODUCT_CODES'] } }
-  });
+  const rows = await db.select()
+    .from(schema.settings)
+    .where(inArray(schema.settings.key, ['QTN_COMPANY_CODE', 'QTN_DATE_FORMAT', 'QTN_PRODUCT_CODES']));
   const dict = {};
   rows.forEach(r => dict[r.key] = r.value);
   return dict;
@@ -42,7 +37,7 @@ const formatDateBySetting = (date, formatType) => {
   const y4 = String(date.getFullYear());
   if (formatType === 'MMDDYY') return `${m}${d}${y2}`;
   if (formatType === 'YYYYMMDD') return `${y4}${m}${d}`;
-  return `${d}${m}${y2}`; // DDMMYY
+  return `${d}${m}${y2}`; // MMDDYY
 };
 
 const versionToLabel = (n) => String.fromCharCode(65 + n); // 0→A, 1→B …
@@ -58,9 +53,14 @@ const buildQuotationNumber = (companyCode, productCode, counter, versionLabel, d
 // ─────────────────────────────────────────────────────────────────────────────
 exports.getCounters = async (req, res) => {
   try {
-    const rows = await prisma.$queryRawUnsafe(
-      'SELECT id, productCode, counter, updatedAt FROM quotation_counters ORDER BY productCode'
-    );
+    const rows = await db.select({
+      id: schema.quotationCounters.id,
+      productCode: schema.quotationCounters.productCode,
+      counter: schema.quotationCounters.counter,
+      updatedAt: schema.quotationCounters.updatedAt
+    })
+    .from(schema.quotationCounters)
+    .orderBy(schema.quotationCounters.productCode);
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -83,18 +83,24 @@ exports.updateCounter = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid product code' });
     }
 
+    const id = randomUUID();
     // Upsert using INSERT ... ON DUPLICATE KEY UPDATE
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
-       VALUES (?, ?, ?, NOW())
-       ON DUPLICATE KEY UPDATE counter = ?, updatedAt = NOW()`,
-      uuidv4(), productCode, counter, counter
-    );
+    await db.execute(sql`
+      INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
+      VALUES (${id}, ${productCode}, ${counter}, NOW())
+      ON DUPLICATE KEY UPDATE counter = ${counter}, updatedAt = NOW()
+    `);
 
-    const [updated] = await prisma.$queryRawUnsafe(
-      'SELECT id, productCode, counter, updatedAt FROM quotation_counters WHERE productCode = ?',
-      productCode
-    );
+    const [updated] = await db.select({
+      id: schema.quotationCounters.id,
+      productCode: schema.quotationCounters.productCode,
+      counter: schema.quotationCounters.counter,
+      updatedAt: schema.quotationCounters.updatedAt
+    })
+    .from(schema.quotationCounters)
+    .where(eq(schema.quotationCounters.productCode, productCode))
+    .limit(1);
+
     res.json({ success: true, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -120,18 +126,26 @@ exports.reserveNumber = async (req, res) => {
     const now = new Date();
 
     // Clean expired reservations
-    await prisma.$executeRawUnsafe(
-      'DELETE FROM quotation_reservations WHERE productCode = ? AND expiresAt < ?',
-      productCode, now
-    );
+    await db.delete(schema.quotationReservations)
+      .where(and(
+        eq(schema.quotationReservations.productCode, productCode),
+        sql`expiresAt < ${now}`
+      ));
 
     // Check if user already has an active reservation for this product
-    const existing = await prisma.$queryRawUnsafe(
-      `SELECT id, quotationNumber, expiresAt FROM quotation_reservations
-       WHERE productCode = ? AND reservedBy = ? AND expiresAt > ?
-       LIMIT 1`,
-      productCode, userId, now
-    );
+    const existing = await db.select({
+      id: schema.quotationReservations.id,
+      quotationNumber: schema.quotationReservations.quotationNumber,
+      expiresAt: schema.quotationReservations.expiresAt
+    })
+    .from(schema.quotationReservations)
+    .where(and(
+      eq(schema.quotationReservations.productCode, productCode),
+      eq(schema.quotationReservations.reservedBy, userId),
+      sql`expiresAt > ${now}`
+    ))
+    .limit(1);
+
     if (existing.length > 0) {
       const r = existing[0];
       return res.json({
@@ -146,29 +160,33 @@ exports.reserveNumber = async (req, res) => {
     }
 
     // Atomically increment the counter
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
-       VALUES (?, ?, 1, NOW())
-       ON DUPLICATE KEY UPDATE counter = counter + 1, updatedAt = NOW()`,
-      uuidv4(), productCode
-    );
+    const id = randomUUID();
+    await db.execute(sql`
+      INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
+      VALUES (${id}, ${productCode}, 1, NOW())
+      ON DUPLICATE KEY UPDATE counter = counter + 1, updatedAt = NOW()
+    `);
 
-    const [counterRow] = await prisma.$queryRawUnsafe(
-      'SELECT counter FROM quotation_counters WHERE productCode = ?',
-      productCode
-    );
-    const newCounter = Number(counterRow.counter);
+    const [counterRow] = await db.select({ counter: schema.quotationCounters.counter })
+      .from(schema.quotationCounters)
+      .where(eq(schema.quotationCounters.productCode, productCode))
+      .limit(1);
+
+    const newCounter = Number(counterRow?.counter || 1);
     const dateStr = formatDateBySetting(now, dateFormat);
     const quotationNumber = buildQuotationNumber(companyCode, productCode, newCounter, 'A', dateStr);
 
-    const resId = uuidv4();
+    const resId = randomUUID();
     const expiresAt = new Date(Date.now() + RESERVATION_TTL_MINUTES * 60 * 1000);
 
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO quotation_reservations (id, productCode, quotationNumber, reservedBy, expiresAt, createdAt)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      resId, productCode, quotationNumber, userId, expiresAt
-    );
+    await db.insert(schema.quotationReservations).values({
+      id: resId,
+      productCode,
+      quotationNumber,
+      reservedBy: userId,
+      expiresAt,
+      createdAt: now
+    });
 
     res.json({
       success: true,
@@ -193,23 +211,29 @@ exports.releaseReservation = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const rows = await prisma.$queryRawUnsafe(
-      'SELECT id, productCode FROM quotation_reservations WHERE id = ? AND reservedBy = ?',
-      id, userId
-    );
+    const rows = await db.select({
+      id: schema.quotationReservations.id,
+      productCode: schema.quotationReservations.productCode
+    })
+    .from(schema.quotationReservations)
+    .where(and(
+      eq(schema.quotationReservations.id, id),
+      eq(schema.quotationReservations.reservedBy, userId)
+    ))
+    .limit(1);
+
     if (!rows.length) {
       return res.status(404).json({ success: false, message: 'Reservation not found' });
     }
 
     const { productCode } = rows[0];
-    await prisma.$executeRawUnsafe(
-      'DELETE FROM quotation_reservations WHERE id = ?', id
-    );
+    await db.delete(schema.quotationReservations).where(eq(schema.quotationReservations.id, id));
     // Decrement counter back (number is released)
-    await prisma.$executeRawUnsafe(
-      'UPDATE quotation_counters SET counter = GREATEST(counter - 1, 0) WHERE productCode = ?',
-      productCode
-    );
+    await db.execute(sql`
+      UPDATE quotation_counters 
+      SET counter = GREATEST(CAST(counter AS SIGNED) - 1, 0) 
+      WHERE productCode = ${productCode}
+    `);
 
     res.json({ success: true });
   } catch (error) {
@@ -225,8 +249,6 @@ exports.reviseQuotation = async (req, res) => {
     const { id } = req.params;
 
     // Delegate entirely to the version service.
-    // The service pre-populates all fields from the latest version, so any
-    // field the frontend doesn't send is preserved from the previous revision.
     const newVersion = await createRevision(id, req.body, req.user.id);
 
     const ioRefresh = req.app.get('io');
@@ -266,4 +288,3 @@ exports.getVersionHistory = async (req, res) => {
     res.status(status).json({ success: false, message: error.message });
   }
 };
-

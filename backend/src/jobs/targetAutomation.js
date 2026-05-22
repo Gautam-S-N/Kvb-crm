@@ -1,6 +1,8 @@
 const cron = require('node-cron');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { eq, and, lte, sql } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
+const { randomUUID } = require('crypto');
 
 const startTargetAutomationMode = (app) => {
   // 1. Daily Refresh & Recurrence (Runs at 23:50 daily)
@@ -11,9 +13,9 @@ const startTargetAutomationMode = (app) => {
       const currentYear = now.getFullYear();
 
       // Refresh all targets for the current year
-      const targets = await prisma.salesTarget.findMany({
-        where: { periodYear: currentYear }
-      });
+      const targets = await db.select()
+        .from(schema.salesTargets)
+        .where(eq(schema.salesTargets.periodYear, currentYear));
 
       for (const t of targets) {
         // --- Part A: Create Next Period if Recurring and Period Ended ---
@@ -25,31 +27,33 @@ const startTargetAutomationMode = (app) => {
             const next = getNextPeriod(t.periodType, t.periodYear, t.periodNumber);
             
             // Check if next one already exists
-            const exists = await prisma.salesTarget.findUnique({
-              where: {
-                employeeId_periodType_periodYear_periodNumber: {
-                  employeeId: t.employeeId,
-                  periodType: t.periodType,
-                  periodYear: next.year,
-                  periodNumber: next.number
-                }
-              }
-            });
+            const existsRows = await db.select()
+              .from(schema.salesTargets)
+              .where(
+                and(
+                  eq(schema.salesTargets.employeeId, t.employeeId),
+                  eq(schema.salesTargets.periodType, t.periodType),
+                  eq(schema.salesTargets.periodYear, next.year),
+                  eq(schema.salesTargets.periodNumber, next.number)
+                )
+              )
+              .limit(1);
 
-            if (!exists) {
-              await prisma.salesTarget.create({
-                data: {
-                  employeeId: t.employeeId,
-                  createdById: t.createdById,
-                  periodType: t.periodType,
-                  periodYear: next.year,
-                  periodNumber: next.number,
-                  revenueTarget: t.revenueTarget,
-                  leadsTarget: t.leadsTarget,
-                  quotationsTarget: t.quotationsTarget,
-                  isRecurring: true,
-                  notes: t.notes
-                }
+            if (existsRows.length === 0) {
+              await db.insert(schema.salesTargets).values({
+                id: randomUUID(),
+                employeeId: t.employeeId,
+                createdById: t.createdById,
+                periodType: t.periodType,
+                periodYear: next.year,
+                periodNumber: next.number,
+                revenueTarget: t.revenueTarget,
+                leadsTarget: t.leadsTarget,
+                quotationsTarget: t.quotationsTarget,
+                isRecurring: true,
+                notes: t.notes || null,
+                createdAt: new Date(),
+                updatedAt: new Date()
               });
               console.log(`[TARGET CRON] Recurring target created for ${t.employeeId} (${t.periodType} ${next.number}/${next.year})`);
             }
@@ -65,20 +69,36 @@ const startTargetAutomationMode = (app) => {
   cron.schedule('*/15 * * * *', async () => {
     try {
       const now = new Date();
-      const pendingReminders = await prisma.salesTarget.findMany({
-        where: {
-          reminderAt: { lte: now },
-          reminderSent: false
-        },
-        include: { employee: true }
-      });
+      const pendingRemindersRows = await db.select({
+        id: schema.salesTargets.id,
+        periodType: schema.salesTargets.periodType,
+        employeeId: schema.salesTargets.employeeId,
+        employeeFirstName: schema.users.firstName
+      })
+      .from(schema.salesTargets)
+      .leftJoin(schema.users, eq(schema.salesTargets.employeeId, schema.users.id))
+      .where(
+        and(
+          lte(schema.salesTargets.reminderAt, now),
+          eq(schema.salesTargets.reminderSent, false)
+        )
+      );
+
+      const pendingReminders = pendingRemindersRows.map(t => ({
+        id: t.id,
+        periodType: t.periodType,
+        employeeId: t.employeeId,
+        employee: t.employeeFirstName ? {
+          firstName: t.employeeFirstName
+        } : null
+      }));
 
       const io = app.get('io');
 
       for (const t of pendingReminders) {
         if (io) {
           io.emit('notification', {
-            type: 'FOLLOW_UP_DUE', // Reuse appropriate type or use general
+            type: 'FOLLOW_UP_DUE',
             title: '⏰ Target Reminder',
             body: `Don't forget to track your ${t.periodType.toLowerCase()} sales targets!`,
             entityType: 'target',
@@ -87,12 +107,11 @@ const startTargetAutomationMode = (app) => {
           });
         }
 
-        await prisma.salesTarget.update({
-          where: { id: t.id },
-          data: { reminderSent: true }
-        });
+        await db.update(schema.salesTargets)
+          .set({ reminderSent: true })
+          .where(eq(schema.salesTargets.id, t.id));
         
-        console.log(`[TARGET CRON] Reminder sent to ${t.employee.firstName} for target ${t.id}`);
+        console.log(`[TARGET CRON] Reminder sent to ${t.employee?.firstName || 'employee'} for target ${t.id}`);
       }
     } catch (err) {
       console.error('[TARGET CRON] Reminder Error:', err.message);

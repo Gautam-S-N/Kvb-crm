@@ -1,31 +1,57 @@
-const prisma = require('../utils/db');
+const { eq, and, or, like, asc, inArray } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
+const { randomUUID } = require('crypto');
 
 // GET all todos for the logged-in admin
 const getTodos = async (req, res) => {
   try {
     const { status, priority, search } = req.query;
 
-    const where = {
-      createdById: req.user.id,
-      type: 'PERSONAL',          // ⬅️ strict separation from team tasks
-    };
+    const conditions = [
+      eq(schema.tasks.createdById, req.user.id),
+      eq(schema.tasks.type, 'PERSONAL')
+    ];
 
-    if (status && status !== 'ALL') where.status = status;
-    if (priority && priority !== 'ALL') where.priority = priority;
+    if (status && status !== 'ALL') {
+      conditions.push(eq(schema.tasks.status, status));
+    }
+    if (priority && priority !== 'ALL') {
+      conditions.push(eq(schema.tasks.priority, priority));
+    }
     if (search) {
-      where.OR = [
-        { title: { contains: search } },
-        { description: { contains: search } },
-      ];
+      conditions.push(
+        or(
+          like(schema.tasks.title, `%${search}%`),
+          like(schema.tasks.description, `%${search}%`)
+        )
+      );
     }
 
-    const todos = await prisma.task.findMany({
-      where,
-      orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
-      include: {
-        checklist: true,
-      },
+    const todosList = await db.select()
+      .from(schema.tasks)
+      .where(and(...conditions))
+      .orderBy(asc(schema.tasks.status), asc(schema.tasks.dueDate));
+
+    let checklists = [];
+    if (todosList.length > 0) {
+      checklists = await db.select()
+        .from(schema.taskChecklistItems)
+        .where(inArray(schema.taskChecklistItems.taskId, todosList.map(t => t.id)));
+    }
+
+    const checklistMap = {};
+    checklists.forEach(item => {
+      if (!checklistMap[item.taskId]) {
+        checklistMap[item.taskId] = [];
+      }
+      checklistMap[item.taskId].push(item);
     });
+
+    const todos = todosList.map(todo => ({
+      ...todo,
+      checklist: checklistMap[todo.id] || []
+    }));
 
     res.json({ success: true, data: todos });
   } catch (error) {
@@ -38,10 +64,14 @@ const createTodo = async (req, res) => {
   try {
     const { title, description, priority, dueDate, reminderAt, checklist } = req.body;
 
-    const todo = await prisma.task.create({
-      data: {
+    let todo;
+    const todoId = randomUUID();
+
+    await db.transaction(async (tx) => {
+      const newTodo = {
+        id: todoId,
         title,
-        description,
+        description: description || null,
         priority: priority || 'MEDIUM',
         status: 'PENDING',
         type: 'PERSONAL',
@@ -50,16 +80,32 @@ const createTodo = async (req, res) => {
         reminderSent: false,
         createdById: req.user.id,
         assignedToId: req.user.id,
-        checklist: checklist && checklist.length > 0
-          ? {
-              create: checklist.map((item) => ({
-                content: item,
-                isCompleted: false,
-              })),
-            }
-          : undefined,
-      },
-      include: { checklist: true },
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      await tx.insert(schema.tasks).values(newTodo);
+
+      const checklistRecords = [];
+      if (checklist && checklist.length > 0) {
+        for (const item of checklist) {
+          const itemId = randomUUID();
+          const newItem = {
+            id: itemId,
+            taskId: todoId,
+            content: item,
+            isCompleted: false,
+            completedAt: null
+          };
+          await tx.insert(schema.taskChecklistItems).values(newItem);
+          checklistRecords.push(newItem);
+        }
+      }
+
+      todo = {
+        ...newTodo,
+        checklist: checklistRecords
+      };
     });
 
     const ioRefresh = req.app.get('io');
@@ -79,26 +125,45 @@ const updateTodo = async (req, res) => {
     const { id } = req.params;
     const { title, description, priority, dueDate, reminderAt } = req.body;
 
-    const existing = await prisma.task.findFirst({
-      where: { id, createdById: req.user.id },
-    });
+    const existingList = await db.select()
+      .from(schema.tasks)
+      .where(
+        and(
+          eq(schema.tasks.id, id),
+          eq(schema.tasks.createdById, req.user.id)
+        )
+      )
+      .limit(1);
 
-    if (!existing) {
+    if (existingList.length === 0) {
       return res.status(404).json({ success: false, message: 'To-do not found' });
     }
 
-    const todo = await prisma.task.update({
-      where: { id },
-      data: {
-        title,
-        description,
-        priority,
-        dueDate: dueDate ? new Date(dueDate) : undefined,
-        reminderAt: reminderAt ? new Date(reminderAt) : null,
-        reminderSent: reminderAt ? false : existing.reminderSent,
-      },
-      include: { checklist: true },
-    });
+    const existing = existingList[0];
+
+    const updateData = {
+      title: title !== undefined ? title : existing.title,
+      description: description !== undefined ? description : existing.description,
+      priority: priority !== undefined ? priority : existing.priority,
+      dueDate: dueDate ? new Date(dueDate) : existing.dueDate,
+      reminderAt: reminderAt ? new Date(reminderAt) : (reminderAt === null ? null : existing.reminderAt),
+      reminderSent: reminderAt ? false : existing.reminderSent,
+      updatedAt: new Date()
+    };
+
+    await db.update(schema.tasks)
+      .set(updateData)
+      .where(eq(schema.tasks.id, id));
+
+    const checklist = await db.select()
+      .from(schema.taskChecklistItems)
+      .where(eq(schema.taskChecklistItems.taskId, id));
+
+    const todo = {
+      ...existing,
+      ...updateData,
+      checklist
+    };
 
     const ioRefresh = req.app.get('io');
     if (ioRefresh) {
@@ -116,22 +181,41 @@ const completeTodo = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const existing = await prisma.task.findFirst({
-      where: { id, createdById: req.user.id },
-    });
+    const existingList = await db.select()
+      .from(schema.tasks)
+      .where(
+        and(
+          eq(schema.tasks.id, id),
+          eq(schema.tasks.createdById, req.user.id)
+        )
+      )
+      .limit(1);
 
-    if (!existing) {
+    if (existingList.length === 0) {
       return res.status(404).json({ success: false, message: 'To-do not found' });
     }
 
-    const todo = await prisma.task.update({
-      where: { id },
-      data: {
-        status: 'COMPLETED',
-        completedAt: new Date(),
-      },
-      include: { checklist: true },
-    });
+    const existing = existingList[0];
+
+    const updateData = {
+      status: 'COMPLETED',
+      completedAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    await db.update(schema.tasks)
+      .set(updateData)
+      .where(eq(schema.tasks.id, id));
+
+    const checklist = await db.select()
+      .from(schema.taskChecklistItems)
+      .where(eq(schema.taskChecklistItems.taskId, id));
+
+    const todo = {
+      ...existing,
+      ...updateData,
+      checklist
+    };
 
     const ioRefresh = req.app.get('io');
     if (ioRefresh) {
@@ -149,15 +233,21 @@ const deleteTodo = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const existing = await prisma.task.findFirst({
-      where: { id, createdById: req.user.id },
-    });
+    const existingList = await db.select()
+      .from(schema.tasks)
+      .where(
+        and(
+          eq(schema.tasks.id, id),
+          eq(schema.tasks.createdById, req.user.id)
+        )
+      )
+      .limit(1);
 
-    if (!existing) {
+    if (existingList.length === 0) {
       return res.status(404).json({ success: false, message: 'To-do not found' });
     }
 
-    await prisma.task.delete({ where: { id } });
+    await db.delete(schema.tasks).where(eq(schema.tasks.id, id));
 
     const ioRefresh = req.app.get('io');
     if (ioRefresh) {
@@ -175,21 +265,36 @@ const toggleTodoChecklist = async (req, res) => {
   try {
     const { id, itemId } = req.params;
 
-    const item = await prisma.taskChecklistItem.findFirst({
-      where: { id: itemId, taskId: id },
-    });
+    const itemsList = await db.select()
+      .from(schema.taskChecklistItems)
+      .where(
+        and(
+          eq(schema.taskChecklistItems.id, itemId),
+          eq(schema.taskChecklistItems.taskId, id)
+        )
+      )
+      .limit(1);
 
-    if (!item) {
+    if (itemsList.length === 0) {
       return res.status(404).json({ success: false, message: 'Checklist item not found' });
     }
 
-    const updated = await prisma.taskChecklistItem.update({
-      where: { id: itemId },
-      data: {
-        isCompleted: !item.isCompleted,
-        completedAt: !item.isCompleted ? new Date() : null,
-      },
-    });
+    const item = itemsList[0];
+    const newCompletedState = !item.isCompleted;
+
+    const updateData = {
+      isCompleted: newCompletedState,
+      completedAt: newCompletedState ? new Date() : null
+    };
+
+    await db.update(schema.taskChecklistItems)
+      .set(updateData)
+      .where(eq(schema.taskChecklistItems.id, itemId));
+
+    const updated = {
+      ...item,
+      ...updateData
+    };
 
     const ioRefresh = req.app.get('io');
     if (ioRefresh) {

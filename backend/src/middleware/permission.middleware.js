@@ -1,45 +1,48 @@
-const prisma = require('../utils/db');
+const { eq, and, gt, like, inArray } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 
 // Fast subordinate lookup using materialized hierarchyPath.
-// Falls back to recursive fetching if hierarchyPath is not yet populated.
 const getSubordinateIds = async (userId, includeDelegated = true) => {
   // Fast path: single query using materialized path
-  const fastSubs = await prisma.user.findMany({
-    where: { hierarchyPath: { contains: `/${userId}/` } },
-    select: { id: true }
-  });
+  const fastSubs = await db.select({ id: schema.users.id })
+    .from(schema.users)
+    .where(like(schema.users.hierarchyPath, `%/${userId}/%`));
 
   const resultIds = new Set(fastSubs.map(u => u.id));
 
-  // Delegated subordinates (always checked the same way)
+  // Delegated subordinates
   if (includeDelegated) {
-    const delegatedToMe = await prisma.user.findMany({
-      where: {
-        delegatedManagerId: userId,
-        delegationExpiresAt: { gt: new Date() }
-      },
-      select: { id: true, hierarchyPath: true }
-    });
+    const delegatedToMe = await db.select({
+      id: schema.users.id,
+      hierarchyPath: schema.users.hierarchyPath
+    })
+    .from(schema.users)
+    .where(
+      and(
+        eq(schema.users.delegatedManagerId, userId),
+        gt(schema.users.delegationExpiresAt, new Date())
+      )
+    );
 
     for (const del of delegatedToMe) {
       resultIds.add(del.id);
       // Also get their subordinates
-      const delSubs = await prisma.user.findMany({
-        where: { hierarchyPath: { contains: `/${del.id}/` } },
-        select: { id: true }
-      });
+      const delSubs = await db.select({ id: schema.users.id })
+        .from(schema.users)
+        .where(like(schema.users.hierarchyPath, `%/${del.id}/%`));
+      
       delSubs.forEach(s => resultIds.add(s.id));
     }
   }
 
-  // Fallback: if no results from materialized path, use legacy recursive approach
-  // (handles users created before hierarchyPath was introduced)
+  // Fallback: legacy recursive approach
   if (resultIds.size === 0) {
     const legacyFetch = async (managerId) => {
-      const directSubs = await prisma.user.findMany({
-        where: { managerId },
-        select: { id: true }
-      });
+      const directSubs = await db.select({ id: schema.users.id })
+        .from(schema.users)
+        .where(eq(schema.users.managerId, managerId));
+        
       for (const sub of directSubs) {
         if (!resultIds.has(sub.id)) {
           resultIds.add(sub.id);
@@ -60,11 +63,12 @@ const requireModule = (moduleName) => {
       if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' });
       if (req.user.role === 'ADMIN') return next();
 
-      const user = await prisma.user.findUnique({
-        where: { id: req.user.id },
-        select: { permissions: true }
-      });
+      const userRows = await db.select({ permissions: schema.users.permissions })
+        .from(schema.users)
+        .where(eq(schema.users.id, req.user.id))
+        .limit(1);
 
+      const user = userRows[0];
       const perms = user?.permissions || {};
       const modules = perms.modules || {};
 
@@ -79,11 +83,7 @@ const requireModule = (moduleName) => {
   };
 };
 
-// Middleware to check elevated permissions
-// Reads the native Boolean columns (canAssignLeads, canAssignTasks, canViewSubordinates)
-// for fast, indexable lookups instead of parsing the JSON blob.
 const NATIVE_PERM_COLUMNS = ['canAssignLeads', 'canAssignTasks', 'canViewSubordinates', 'canCreateMaterialRequests'];
-
 
 const requireElevated = (permissionName) => {
   return async (req, res, next) => {
@@ -91,24 +91,28 @@ const requireElevated = (permissionName) => {
       if (!req.user) return res.status(401).json({ success: false, message: 'Unauthorized' });
       if (req.user.role === 'ADMIN') return next();
 
-      // If this permission has a dedicated native column, query it directly (fast path)
       if (NATIVE_PERM_COLUMNS.includes(permissionName)) {
-        const user = await prisma.user.findUnique({
-          where: { id: req.user.id },
-          select: { [permissionName]: true }
-        });
+        // Dynamic select using index key in Drizzle
+        const selectFields = {};
+        selectFields[permissionName] = schema.users[permissionName];
 
+        const userRows = await db.select(selectFields)
+          .from(schema.users)
+          .where(eq(schema.users.id, req.user.id))
+          .limit(1);
+
+        const user = userRows[0];
         if (user?.[permissionName] === true) return next();
 
         return res.status(403).json({ success: false, message: `Missing elevated permission: ${permissionName}` });
       }
 
-      // Fallback: check JSON blob for any non-native permission keys
-      const user = await prisma.user.findUnique({
-        where: { id: req.user.id },
-        select: { permissions: true }
-      });
+      const userRows = await db.select({ permissions: schema.users.permissions })
+        .from(schema.users)
+        .where(eq(schema.users.id, req.user.id))
+        .limit(1);
 
+      const user = userRows[0];
       const perms = user?.permissions || {};
       if (perms[permissionName] === true) return next();
 

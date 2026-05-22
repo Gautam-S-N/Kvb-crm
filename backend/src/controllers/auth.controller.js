@@ -1,6 +1,9 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const prisma = require('../utils/db');
+const { eq } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
+const { randomUUID } = require('crypto');
 
 // Register (Admin only - for creating users)
 exports.register = async (req, res) => {
@@ -8,8 +11,12 @@ exports.register = async (req, res) => {
     const { email, password, firstName, lastName, phone, role } = req.body;
 
     // Check if user exists
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) {
+    const existingList = await db.select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
+
+    if (existingList.length > 0) {
       return res.status(400).json({ success: false, message: 'User already exists' });
     }
 
@@ -18,22 +25,41 @@ exports.register = async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     // Create user
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        firstName,
-        lastName,
-        phone,
-        role: role || 'USER'
-      },
-      select: { id: true, email: true, firstName: true, lastName: true, role: true, status: true, createdAt: true }
-    });
+    const id = randomUUID();
+    const newUser = {
+      id,
+      email,
+      password: hashedPassword,
+      firstName,
+      lastName,
+      phone: phone || null,
+      role: role || 'USER',
+      status: 'ACTIVE',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      isSuperAdmin: false,
+      canAssignLeads: false,
+      canAssignTasks: false,
+      canViewSubordinates: false,
+      canCreateMaterialRequests: false
+    };
+
+    await db.insert(schema.users).values(newUser);
+
+    const userResponse = {
+      id: newUser.id,
+      email: newUser.email,
+      firstName: newUser.firstName,
+      lastName: newUser.lastName,
+      role: newUser.role,
+      status: newUser.status,
+      createdAt: newUser.createdAt
+    };
 
     res.status(201).json({
       success: true,
       message: 'User created successfully',
-      data: user
+      data: userResponse
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -46,10 +72,16 @@ exports.login = async (req, res) => {
     const { email, password } = req.body;
 
     // Find user
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
+    const usersList = await db.select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
+
+    if (usersList.length === 0) {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
+
+    const user = usersList[0];
 
     // Check status
     if (user.status !== 'ACTIVE') {
@@ -63,10 +95,9 @@ exports.login = async (req, res) => {
     }
 
     // Update last login
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() }
-    });
+    await db.update(schema.users)
+      .set({ lastLoginAt: new Date() })
+      .where(eq(schema.users.id, user.id));
 
     // Generate JWT
     const token = jwt.sign(
@@ -77,6 +108,7 @@ exports.login = async (req, res) => {
 
     // Return user data (without password)
     const { password: _, ...userData } = user;
+    userData.lastLoginAt = new Date(); // Reflecting immediate update
 
     res.json({
       success: true,
@@ -94,13 +126,35 @@ exports.login = async (req, res) => {
 // Get current user
 exports.me = async (req, res) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id },
-      select: { id: true, email: true, firstName: true, lastName: true, phone: true, role: true, status: true, avatar: true, lastLoginAt: true, createdAt: true, permissions: true, managerId: true, delegatedManagerId: true, isSuperAdmin: true, canAssignLeads: true, canAssignTasks: true, canViewSubordinates: true, canCreateMaterialRequests: true }
+    const usersList = await db.select({
+      id: schema.users.id,
+      email: schema.users.email,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName,
+      phone: schema.users.phone,
+      role: schema.users.role,
+      status: schema.users.status,
+      avatar: schema.users.avatar,
+      lastLoginAt: schema.users.lastLoginAt,
+      createdAt: schema.users.createdAt,
+      permissions: schema.users.permissions,
+      managerId: schema.users.managerId,
+      delegatedManagerId: schema.users.delegatedManagerId,
+      isSuperAdmin: schema.users.isSuperAdmin,
+      canAssignLeads: schema.users.canAssignLeads,
+      canAssignTasks: schema.users.canAssignTasks,
+      canViewSubordinates: schema.users.canViewSubordinates,
+      canCreateMaterialRequests: schema.users.canCreateMaterialRequests
+    })
+    .from(schema.users)
+    .where(eq(schema.users.id, req.user.id))
+    .limit(1);
 
-    });
+    if (usersList.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
 
-    res.json({ success: true, data: user });
+    res.json({ success: true, data: usersList[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -111,14 +165,15 @@ exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
     
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      // Don't reveal if user exists
+    const usersList = await db.select()
+      .from(schema.users)
+      .where(eq(schema.users.email, email))
+      .limit(1);
+
+    if (usersList.length === 0) {
       return res.json({ success: true, message: 'If email exists, reset link sent' });
     }
 
-    // TODO: Implement email sending with reset token
-    // For now, just return success
     res.json({ success: true, message: 'Password reset link sent to email' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

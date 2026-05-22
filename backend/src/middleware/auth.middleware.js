@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
-const prisma = require('../utils/db');
+const { eq } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -12,17 +14,19 @@ const authMiddleware = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.id },
-      select: { 
-        id: true, 
-        email: true, 
-        firstName: true, 
-        lastName: true, 
-        role: true, 
-        status: true 
-      }
-    });
+    const userRows = await db.select({
+      id: schema.users.id,
+      email: schema.users.email,
+      firstName: schema.users.firstName,
+      lastName: schema.users.lastName,
+      role: schema.users.role,
+      status: schema.users.status
+    })
+    .from(schema.users)
+    .where(eq(schema.users.id, decoded.id))
+    .limit(1);
+
+    const user = userRows[0];
 
     if (!user) {
       return res.status(401).json({ success: false, message: 'User not found' });

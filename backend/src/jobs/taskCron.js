@@ -1,19 +1,13 @@
 /**
  * taskCron.js
  * ─────────────────────────────────────────────────────────────────────────────
- * Hourly cron that:
- *   1. Marks overdue tasks: transitions PENDING/IN_PROGRESS tasks to OVERDUE
- *      when their dueDate has passed.
- *   2. Notifies the assigned employee that their task is now overdue.
- *   3. Escalates to the manager if a task has been OVERDUE for >48 hours
- *      without any update (configurable via TASK_ESCALATION_HOURS env var).
- *
- * Runs at: every hour (configurable via CRON_TASK_OVERDUE env var).
- * Frequency: 'hourly' — change CRON_TASK_OVERDUE to "0,30 * * * *" for every 30 minutes.
+ * Hourly cron that handles overdue tasks and escalations.
  */
 
 const cron = require('node-cron');
-const prisma = require('../utils/db');
+const { eq, and, lt, inArray } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const { sendNotification } = require('../services/notification.service');
 
 const startTaskCron = (app) => {
@@ -29,28 +23,29 @@ const startTaskCron = (app) => {
       const escalationThreshold = new Date(now.getTime() - escalationHours * 60 * 60 * 1000);
 
       // ── Step 1: Find tasks that should be marked overdue ─────────────────
-      const overdueNow = await prisma.task.findMany({
-        where: {
-          dueDate: { lt: now },
-          status: { in: ['PENDING', 'IN_PROGRESS'] },
-          isArchived: false
-        },
-        include: {
-          assignedTo: { select: { id: true, firstName: true, lastName: true, managerId: true } },
-          createdBy:  { select: { id: true, firstName: true, lastName: true } }
-        }
-      });
+      const overdueNow = await db.select({
+        id: schema.tasks.id,
+        title: schema.tasks.title,
+        dueDate: schema.tasks.dueDate,
+        assignedToId: schema.tasks.assignedToId,
+        createdById: schema.tasks.createdById
+      })
+      .from(schema.tasks)
+      .where(
+        and(
+          lt(schema.tasks.dueDate, now),
+          inArray(schema.tasks.status, ['PENDING', 'IN_PROGRESS']),
+          eq(schema.tasks.isArchived, false)
+        )
+      );
 
       if (overdueNow.length > 0) {
-        // Bulk update all to OVERDUE in a single query
-        await prisma.task.updateMany({
-          where: {
-            id: { in: overdueNow.map(t => t.id) }
-          },
-          data: { status: 'OVERDUE' }
-        });
+        const overdueIds = overdueNow.map(t => t.id);
+        
+        await db.update(schema.tasks)
+          .set({ status: 'OVERDUE' })
+          .where(inArray(schema.tasks.id, overdueIds));
 
-        // Send a notification to each newly-overdue task's assignee
         for (const task of overdueNow) {
           await sendNotification(io, {
             userId: task.assignedToId,
@@ -68,28 +63,48 @@ const startTaskCron = (app) => {
       }
 
       // ── Step 2: Escalate tasks that have been OVERDUE for >N hours ────────
-      const toEscalate = await prisma.task.findMany({
-        where: {
-          status: 'OVERDUE',
-          isArchived: false,
-          updatedAt: { lt: escalationThreshold }
-        },
-        include: {
-          assignedTo: { select: { id: true, firstName: true, lastName: true, managerId: true } },
-          createdBy:  { select: { id: true, firstName: true, lastName: true } }
-        }
-      });
+      const toEscalateRows = await db.select({
+        id: schema.tasks.id,
+        title: schema.tasks.title,
+        assignedToId: schema.tasks.assignedToId,
+        createdById: schema.tasks.createdById,
+        assignedToId_: schema.users.id,
+        assignedToFirstName: schema.users.firstName,
+        assignedToLastName: schema.users.lastName,
+        assignedToManagerId: schema.users.managerId
+      })
+      .from(schema.tasks)
+      .leftJoin(schema.users, eq(schema.tasks.assignedToId, schema.users.id))
+      .where(
+        and(
+          eq(schema.tasks.status, 'OVERDUE'),
+          eq(schema.tasks.isArchived, false),
+          lt(schema.tasks.updatedAt, escalationThreshold)
+        )
+      );
+
+      const toEscalate = toEscalateRows.map(r => ({
+        id: r.id,
+        title: r.title,
+        assignedToId: r.assignedToId,
+        createdById: r.createdById,
+        assignedTo: r.assignedToId_ ? {
+          id: r.assignedToId_,
+          firstName: r.assignedToFirstName,
+          lastName: r.assignedToLastName,
+          managerId: r.assignedToManagerId
+        } : null
+      }));
 
       for (const task of toEscalate) {
         const managerId = task.assignedTo?.managerId;
 
-        // Notify the creator (if they didn't create it themselves)
         if (task.createdById !== task.assignedToId) {
           await sendNotification(io, {
             userId: task.createdById,
             type: 'TASK_ESCALATED',
             title: '🚨 Task Escalation',
-            body: `"${task.title}" assigned to ${task.assignedTo.firstName} has been overdue for more than ${escalationHours} hours.`,
+            body: `"${task.title}" assigned to ${task.assignedTo?.firstName || 'subordinate'} has been overdue for more than ${escalationHours} hours.`,
             entityType: 'task',
             entityId: task.id
           }).catch(err =>
@@ -97,13 +112,12 @@ const startTaskCron = (app) => {
           );
         }
 
-        // Also notify the direct manager if one exists
         if (managerId && managerId !== task.createdById) {
           await sendNotification(io, {
             userId: managerId,
             type: 'TASK_ESCALATED',
             title: '🚨 Team Task Escalation',
-            body: `"${task.title}" (assigned to ${task.assignedTo.firstName} ${task.assignedTo.lastName}) has been overdue for more than ${escalationHours} hours.`,
+            body: `"${task.title}" (assigned to ${task.assignedTo?.firstName || ''} ${task.assignedTo?.lastName || ''}) has been overdue for more than ${escalationHours} hours.`,
             entityType: 'task',
             entityId: task.id
           }).catch(err =>

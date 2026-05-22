@@ -136,10 +136,10 @@ export default function DryerComponents() {
                 <th className="px-4 py-3">#</th>
                 <th className="px-4 py-3">Component Name</th>
                 <th className="px-4 py-3">Code</th>
+                <th className="px-4 py-3">Size</th>
                 <th className="px-4 py-3 text-right">Qty / Stock</th>
                 <th className="px-4 py-3">Unit</th>
                 <th className="px-4 py-3 text-right">Rate (₹)</th>
-                <th className="px-4 py-3">Remarks / Size</th>
                 <th className="px-4 py-3 text-center">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -153,7 +153,10 @@ export default function DryerComponents() {
                 <tr key={m.id} className="hover:bg-amber-50/30 dark:hover:bg-amber-900/10 text-sm transition-colors">
                   <td className="px-4 py-3 text-gray-400 text-xs">{i + 1}</td>
                   <td className="px-4 py-3 font-semibold text-gray-900 dark:text-white">{m.itemName}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-500">{m.itemCode || '—'}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-gray-500 whitespace-nowrap">{m.itemCode || '—'}</td>
+                  <td className="px-4 py-3 text-xs font-mono text-gray-700 dark:text-gray-300">
+                    <span title={m.remarks || ''}>{m.remarks || '—'}</span>
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <span className="font-bold text-gray-900 dark:text-white">{Number(m.balance)}</span>
                     {Number(m.inQty) > 0 && <div className="text-[10px] text-blue-500">In: {Number(m.inQty)}</div>}
@@ -163,7 +166,6 @@ export default function DryerComponents() {
                   <td className="px-4 py-3 text-right text-gray-600 dark:text-gray-400">
                     {Number(m.rate) > 0 ? `₹${Number(m.rate).toLocaleString('en-IN')}` : '—'}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500 max-w-xs truncate">{m.remarks || '—'}</td>
                   <td className="px-4 py-3 text-center">
                     <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${stockBadge(m.balance, m.minQuantity)}`}>
                       {Number(m.balance) <= 0 ? 'OUT' : Number(m.balance) <= Number(m.minQuantity) ? 'LOW' : 'OK'}
@@ -258,10 +260,10 @@ export default function DryerComponents() {
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Remarks / Size</label>
-                  <textarea rows={2} value={form.remarks} onChange={e => setForm(p => ({...p, remarks: e.target.value}))}
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-amber-400 outline-none resize-none"
-                    placeholder="Size, spec, supplier notes…"/>
+                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Size / Dimensions</label>
+                  <input value={form.remarks} onChange={e => setForm(p => ({...p, remarks: e.target.value}))}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-amber-400 outline-none"
+                    placeholder="e.g. 40x40"/>
                 </div>
               </div>
 

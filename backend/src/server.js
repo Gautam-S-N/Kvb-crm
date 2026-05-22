@@ -1,6 +1,8 @@
+require('dotenv').config();
+// Triggering nodemon reload after port release
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const cookieParser = require('cookie-parser');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
@@ -24,10 +26,6 @@ const startTaskCron = require('./jobs/taskCron');
 const todoRoutes = require('./routes/todo.routes');
 const activityLogRoutes = require('./routes/activityLog.routes');
 
-
-
-// Load env vars
-dotenv.config();
 
 // Import routes
 const authRoutes = require('./routes/auth.routes');

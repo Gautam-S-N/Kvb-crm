@@ -1,23 +1,36 @@
 /**
  * scripts/reseedDCRaw.js
  * Wipes all existing DC Raw Material records and re-seeds them
- * in exact Sheet3 order with size stored in remarks field.
+ * in exact Sheet3 order.
+ *  - Type  → location field
+ *  - Size  → remarks field
+ *  - Section heading → projectSite field
  * Run: node scripts/reseedDCRaw.js
  */
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const XLSX  = require('xlsx');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { db } = require('../src/utils/drizzle');
+const schema = require('../src/models/schema');
+const { inArray } = require('drizzle-orm');
+const { randomUUID } = require('crypto');
 
 const DC_RAW_CATS = ['Sq. Tube','Flat Plate','Rec. Tube','Hardware','Round Tube','Round Rod','L Angle','C Channel'];
 
 async function run() {
+  console.log('Starting Drizzle-based DC Raw Material reseed...');
+  
   // 1. Delete all existing DC Raw records
-  const deleted = await prisma.material.deleteMany({
-    where: { category: { in: DC_RAW_CATS } }
-  });
-  console.log(`🗑️  Deleted ${deleted.count} existing DC Raw Material records.\n`);
+  try {
+    const deletedResult = await db.delete(schema.materials)
+      .where(inArray(schema.materials.category, DC_RAW_CATS));
+    
+    console.log(`🗑️  Cleaned existing DC Raw Material records.\n`);
+  } catch (err) {
+    console.error('Error deleting materials:', err.message);
+  }
 
   // 2. Read Sheet3
+  // Columns: [0]=SlNo [1]=Item [2]=Category [3]=Type [4]=Size [5]=Qty
   const wb   = XLSX.readFile('D:/kvb-crm/DC LIST 2026.xlsx');
   const rows = XLSX.utils.sheet_to_json(wb.Sheets['Sheet3'], { header: 1 });
 
@@ -29,12 +42,12 @@ async function run() {
     const row = rows[i];
     if (!row || row.length === 0) continue;
 
-    const [slNo, item, category, type, size] = row;
+    const [slNo, item, category, type, size, qty] = row;
 
-    // Section heading row: has slNo or item but NO category
+    // Section heading row: has slNo/item but NO category
     if ((slNo || item) && !category) {
       currentSection = String(item || slNo).trim();
-      console.log(`📂 Entering Section: ${currentSection}`);
+      console.log(`\n📂 Section: ${currentSection}`);
       continue;
     }
 
@@ -49,32 +62,34 @@ async function run() {
     seq++;
     const itemCode = `DC3-${String(seq).padStart(3, '0')}`;
 
-    // Build remarks: combine type + size
-    const parts = [];
-    if (type) parts.push(String(type).trim());
-    if (size) parts.push(String(size).trim());
-    const remarks = parts.join(' — ');
+    const typeStr = type  ? String(type).trim()  : '';
+    const sizeStr = size  ? String(size).trim()  : '';
 
-    await prisma.material.create({
-      data: {
-        itemName,
-        itemCode,
-        category:    cat,
-        unit:        'Nos',
-        rate:        0,
-        balance:     0,
-        minQuantity: 0,
-        remarks:     remarks || '',
-        projectSite: currentSection, // Store section title here
-      }
+    await db.insert(schema.materials).values({
+      id: randomUUID(),
+      itemName,
+      itemCode,
+      category:    cat,
+      unit:        'Nos',
+      rate:        '0.00',
+      balance:     '0.00',
+      minQuantity: '0.00',
+      location:    typeStr || null,    // Type  → location
+      remarks:     sizeStr || null,    // Size  → remarks
+      projectSite: currentSection || null,  // Section heading
+      createdAt: new Date(),
+      updatedAt: new Date()
     });
+    
     created++;
-    console.log(`  ✓ [${seq}] [${cat}] ${itemName} (Section: ${currentSection})`);
+    console.log(`  ✓ [${seq}] [${cat}] ${itemName}${typeStr ? ' | Type: ' + typeStr : ''}${sizeStr ? ' | Size: ' + sizeStr : ''}${currentSection ? ' | Section: ' + currentSection : ''}`);
   }
 
   console.log(`\n✅ Done — ${created} DC Raw Material records seeded in order.`);
+  process.exit(0);
 }
 
-run()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect());
+run().catch(err => {
+  console.error('Reseed failed:', err);
+  process.exit(1);
+});

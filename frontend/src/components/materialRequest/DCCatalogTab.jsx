@@ -89,21 +89,27 @@ export default function DCCatalogTab() {
           <table className="w-full text-sm text-left">
             <thead className="bg-gray-50 text-gray-500 text-[10px] uppercase">
               <tr>
-                <th className="px-4 py-3">#</th><th className="px-4 py-3">Item Name</th><th className="px-4 py-3">Code</th>
-                <th className="px-4 py-3">Category</th><th className="px-4 py-3">Unit</th><th className="px-4 py-3 text-right">Rate</th>
+                <th className="px-4 py-3">#</th>
+                <th className="px-4 py-3">Item Name</th>
+                <th className="px-4 py-3">Code</th>
+                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Size</th>
+                <th className="px-4 py-3">Unit</th>
+                <th className="px-4 py-3 text-right">Rate</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {shown.length===0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{isLoading?'Loading…':'No items found.'}</td></tr>
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-gray-400">{isLoading?'Loading…':'No items found.'}</td></tr>
               ) : (
                 (() => {
                   let lastSection = null;
                   return shown.map((m, i) => {
                     const sectionHeading = m.projectSite && m.projectSite !== lastSection ? (
                       <tr key={`section-${m.projectSite}`} className="bg-gray-50/50">
-                        <td colSpan={7} className="px-4 py-2 text-[10px] font-black text-red-600 uppercase tracking-widest border-y border-gray-100">
+                        <td colSpan={9} className="px-4 py-2 text-[10px] font-black text-red-600 uppercase tracking-widest border-y border-gray-100">
                           {m.projectSite}
                         </td>
                       </tr>
@@ -116,8 +122,10 @@ export default function DCCatalogTab() {
                         <tr key={m.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-gray-400 text-xs">{i+1}</td>
                           <td className="px-4 py-3 font-medium text-gray-900">{m.itemName}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-500">{m.itemCode||'—'}</td>
-                          <td className="px-4 py-3"><span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] rounded-full font-semibold">{m.category}</span></td>
+                          <td className="px-4 py-3 font-mono text-xs text-gray-500 whitespace-nowrap">{m.itemCode||'—'}</td>
+                          <td className="px-4 py-3"><span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-[10px] rounded-full font-semibold whitespace-nowrap">{m.category}</span></td>
+                          <td className="px-4 py-3 text-xs text-gray-700 max-w-[150px]"><span className="truncate block" title={m.location||''}>{m.location||'—'}</span></td>
+                          <td className="px-4 py-3 text-xs font-mono text-gray-700 max-w-[130px]"><span className="truncate block" title={m.remarks||''}>{m.remarks||'—'}</span></td>
                           <td className="px-4 py-3 text-xs text-gray-500 uppercase">{m.unit}</td>
                           <td className="px-4 py-3 text-right text-gray-600">₹{Number(m.rate).toLocaleString('en-IN')}</td>
                           <td className="px-4 py-3 text-right">
@@ -182,9 +190,9 @@ export default function DCCatalogTab() {
                     className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none"/>
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Location</label>
+                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Type (Material Spec)</label>
                   <input value={form.location} onChange={e=>setForm(p=>({...p,location:e.target.value}))}
-                    className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none" placeholder="Warehouse / Site"/>
+                    className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none" placeholder="e.g. Tube 20x20 / MS Seamless / Fasteners"/>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3 pt-2 border-t">
@@ -201,9 +209,9 @@ export default function DCCatalogTab() {
                 ))}
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Remarks / Size</label>
-                <textarea rows={2} value={form.remarks} onChange={e=>setForm(p=>({...p,remarks:e.target.value}))}
-                  className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none resize-none" placeholder="Type, size, notes…"/>
+                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Size / Dimensions</label>
+                <input value={form.remarks} onChange={e=>setForm(p=>({...p,remarks:e.target.value}))}
+                  className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none" placeholder="e.g. 6000x20x20x3"/>
               </div>
               <div className="flex gap-3">
                 <button type="button" onClick={()=>setModal(false)} className="flex-1 py-2.5 border rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50">Cancel</button>

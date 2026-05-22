@@ -1,10 +1,13 @@
-const prisma = require('../utils/db');
+const { eq, and, inArray, sql, desc, asc, like, lt, gte, or } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const { triggerRefreshForEmployee } = require('../services/achievement.service');
+const { randomUUID } = require('crypto');
 
-// ─── Load company logo as Base64 (embedded in PDF — Puppeteer can't fetch URLs) ─
+// ─── Load company logo as Base64 (embedded in PDF) ───────────────────────────
 const getLogoBase64 = () => {
   const exts = ['png', 'jpg', 'jpeg', 'svg', 'webp'];
   const assetsDir = path.join(__dirname, '../assets');
@@ -12,20 +15,20 @@ const getLogoBase64 = () => {
     const logoPath = path.join(assetsDir, `logo.${ext}`);
     if (fs.existsSync(logoPath)) {
       const data = fs.readFileSync(logoPath);
-      const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', svg: 'image/svg+xml', webp: 'image/webp' };
-      return `data:${mimeMap[ext]};base64,${data.toString('base64')}`;
+      const mimeMap = { png: 'image/png', gjpg: 'image/jpeg', jpeg: 'image/jpeg', svg: 'image/svg+xml', webp: 'image/webp' };
+      return `data:${mimeMap[ext] || 'image/jpeg'};base64,${data.toString('base64')}`;
     }
   }
-  return null; // no logo file found
+  return null;
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const generateSaleNumber = async () => {
-  const settings = await prisma.setting.findMany({
-    where: { key: { in: ['INV_PREFIX', 'INV_DATE_FORMAT'] } }
-  });
-  const getSetting = (k, def) => settings.find(s => s.key === k)?.value || def;
+  const settingsList = await db.select()
+    .from(schema.settings)
+    .where(inArray(schema.settings.key, ['INV_PREFIX', 'INV_DATE_FORMAT', 'INV_CUSTOM_YEAR']));
+  const getSetting = (k, def) => settingsList.find(s => s.key === k)?.value || def;
 
   const prefix = getSetting('INV_PREFIX', 'INV');
   const format = getSetting('INV_DATE_FORMAT', 'FY_YY_YY');
@@ -47,24 +50,29 @@ const generateSaleNumber = async () => {
   else if (format === 'YYYYMM') dateStr = `${year}${String(month).padStart(2, '0')}`;
   else if (format === 'CUSTOM') dateStr = customYearStr;
 
-  const where = format === 'FY_YY_YY' ? {
-    createdAt: { gte: fyStartDate, lt: fyEndDate }
-  } : format === 'YYYY' ? {
-    createdAt: { gte: new Date(year, 0, 1), lt: new Date(year + 1, 0, 1) }
-  } : format === 'YYYYMM' ? {
-    createdAt: { gte: new Date(year, month - 1, 1), lt: new Date(year, month, 1) }
-  } : format === 'CUSTOM' ? {
-    saleNumber: { contains: `/${customYearStr}/` }
-  } : {};
+  const conditions = [];
+  if (format === 'FY_YY_YY') {
+    conditions.push(gte(schema.sales.createdAt, fyStartDate), lt(schema.sales.createdAt, fyEndDate));
+  } else if (format === 'YYYY') {
+    conditions.push(gte(schema.sales.createdAt, new Date(year, 0, 1)), lt(schema.sales.createdAt, new Date(year + 1, 0, 1)));
+  } else if (format === 'YYYYMM') {
+    conditions.push(gte(schema.sales.createdAt, new Date(year, month - 1, 1)), lt(schema.sales.createdAt, new Date(year, month, 1)));
+  } else if (format === 'CUSTOM') {
+    conditions.push(like(schema.sales.saleNumber, `%/${customYearStr}/%`));
+  }
 
-  const count = await prisma.sale.count({ where });
+  const countResult = await db.select({ count: sql`count(*)` })
+    .from(schema.sales)
+    .where(conditions.length > 0 ? and(...conditions) : undefined);
+  const count = Number(countResult[0]?.count || 0);
   
   const middlePart = dateStr ? `/${dateStr}` : '';
   return `${prefix}${middlePart}/${String(count + 1).padStart(3, '0')}`;
 };
 
 const generateReceiptNumber = async () => {
-  const count = await prisma.payment.count();
+  const countResult = await db.select({ count: sql`count(*)` }).from(schema.payments);
+  const count = Number(countResult[0]?.count || 0);
   return `RCP-${String(count + 1).padStart(5, '0')}`;
 };
 
@@ -74,7 +82,7 @@ const ensureDir = (dirPath) => {
   }
 };
 
-// ─── Number-to-words (simple INR) ────────────────────────────────────────────
+// ─── Number-to-words ─────────────────────────────────────────────────────────
 const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
   'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
 const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
@@ -90,17 +98,15 @@ function inWords(num) {
   return inWords(Math.floor(n / 10000000)) + ' Crore' + (n % 10000000 ? ' ' + inWords(n % 10000000) : '');
 }
 
-// ─── Invoice HTML Template (KVB Invoice-final.docx format) ───────────────────
+// ─── Invoice HTML Template ───────────────────────────────────────────────────
 const buildInvoiceHTML = (sale) => {
   const logoSrc = getLogoBase64();
-  // Parse stored metadata from notes field
   let meta = {};
   const rawNotes = sale.notes || '';
   const metaMatch = rawNotes.match(/__META__({.*})/);
   if (metaMatch) {
     try { meta = JSON.parse(metaMatch[1]); } catch {}
   }
-  const cleanNotes = rawNotes.replace(/__META__.*/, '').trim();
   const taxType = meta.taxType || 'CGST_SGST';
 
   const taxableAmount = Number(sale.subTotal) - Number(sale.discountAmount);
@@ -108,7 +114,6 @@ const buildInvoiceHTML = (sale) => {
   const cgst = totalTax / 2;
   const sgst = totalTax / 2;
 
-  // ── Items rows ──────────────────────────────────────────
   const itemsRows = sale.items.map((item, i) => {
     const qty = Number(item.quantity);
     const rate = Number(item.unitPrice);
@@ -131,7 +136,6 @@ const buildInvoiceHTML = (sale) => {
       </tr>`;
   }).join('');
 
-  // ── GST breakdown rows ──────────────────────────────────
   const gstRows = sale.items.map((item) => {
     const qty = Number(item.quantity);
     const rate = Number(item.unitPrice);
@@ -150,7 +154,6 @@ const buildInvoiceHTML = (sale) => {
           <td style="border:1px solid #999;padding:5px 4px;text-align:right;">₹${totalItemTax.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
         </tr>`;
     }
-    // CGST + SGST
     const half = totalItemTax / 2;
     return `
       <tr>
@@ -217,7 +220,6 @@ const buildInvoiceHTML = (sale) => {
     .company-block .name { font-size: 16px; font-weight: bold; color: #15803d; margin-bottom: 4px; }
     .company-block p { margin-top: 2px; line-height: 1.55; font-size: 11.5px; }
     .company-block .gstin { font-weight: bold; }
-    .meta-block { }
     .meta-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #bbb; }
     .meta-row:last-child { border-bottom: none; }
     .meta-cell { padding: 5px 9px; font-size: 11px; border-right: 1px solid #bbb; }
@@ -228,7 +230,6 @@ const buildInvoiceHTML = (sale) => {
     .buyer-block { padding: 10px 14px; border-right: 1px solid #777; }
     .buyer-block .buyer-label { font-size: 9.5px; font-weight: bold; color: #555; text-transform: uppercase; margin-bottom: 5px; }
     .buyer-block p { line-height: 1.6; font-size: 11.5px; }
-    .dispatch-block { }
     .dispatch-row { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #bbb; }
     .dispatch-row:last-child { border-bottom: none; }
     .dispatch-cell { padding: 5px 9px; font-size: 11px; border-right: 1px solid #bbb; }
@@ -444,7 +445,6 @@ const buildInvoiceHTML = (sale) => {
 </html>`;
 };
 
-
 // ─── Receipt HTML Template ────────────────────────────────────────────────────
 const buildReceiptHTML = (payment, sale) => `
 <!DOCTYPE html>
@@ -505,55 +505,123 @@ exports.getSales = async (req, res) => {
   try {
     const { status, paymentStatus, customerId, search, page = 1, limit = 100 } = req.query;
 
-    const where = {};
+    const conditions = [];
 
-    // Role-based filtering
     if (req.user.role === 'EMPLOYEE') {
-      where.createdById = req.user.id;
+      conditions.push(eq(schema.sales.createdById, req.user.id));
     }
 
-    if (status) where.status = status;
-    if (paymentStatus) where.paymentStatus = paymentStatus;
-    if (customerId) where.customerId = customerId;
+    if (status) conditions.push(eq(schema.sales.status, status));
+    if (paymentStatus) conditions.push(eq(schema.sales.paymentStatus, paymentStatus));
+    if (customerId) conditions.push(eq(schema.sales.customerId, customerId));
 
     if (search) {
-      where.OR = [
-        { saleNumber: { contains: search } },
-        { customer: { contactName: { contains: search } } },
-        { customer: { companyName: { contains: search } } },
-        { customer: { phone: { contains: search } } }
-      ];
+      conditions.push(
+        or(
+          like(schema.sales.saleNumber, `%${search}%`),
+          like(schema.customers.contactName, `%${search}%`),
+          like(schema.customers.companyName, `%${search}%`),
+          like(schema.customers.phone, `%${search}%`)
+        )
+      );
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    const parsedLimit = parseInt(limit);
 
-    const [sales, total] = await Promise.all([
-      prisma.sale.findMany({
-        where,
-        include: {
-          customer: {
-            select: { id: true, contactName: true, companyName: true, phone: true }
-          },
-          createdBy: {
-            select: { id: true, firstName: true, lastName: true }
-          },
-          _count: { select: { items: true, payments: true } }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.sale.count({ where })
+    const [salesRaw, countResult] = await Promise.all([
+      db.select({
+        id: schema.sales.id,
+        saleNumber: schema.sales.saleNumber,
+        customerId: schema.sales.customerId,
+        createdById: schema.sales.createdById,
+        quotationId: schema.sales.quotationId,
+        status: schema.sales.status,
+        paymentStatus: schema.sales.paymentStatus,
+        subTotal: schema.sales.subTotal,
+        discountAmount: schema.sales.discountAmount,
+        taxAmount: schema.sales.taxAmount,
+        totalAmount: schema.sales.totalAmount,
+        paidAmount: schema.sales.paidAmount,
+        balanceAmount: schema.sales.balanceAmount,
+        notes: schema.sales.notes,
+        invoiceUrl: schema.sales.invoiceUrl,
+        saleDate: schema.sales.saleDate,
+        createdAt: schema.sales.createdAt,
+        updatedAt: schema.sales.updatedAt,
+        customerId_: schema.customers.id,
+        customerContactName: schema.customers.contactName,
+        customerCompanyName: schema.customers.companyName,
+        customerPhone: schema.customers.phone,
+        createdById_: schema.users.id,
+        createdByFirstName: schema.users.firstName,
+        createdByLastName: schema.users.lastName
+      })
+      .from(schema.sales)
+      .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+      .leftJoin(schema.users, eq(schema.sales.createdById, schema.users.id))
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(schema.sales.createdAt))
+      .limit(parsedLimit)
+      .offset(skip),
+
+      db.select({ count: sql`count(*)` })
+        .from(schema.sales)
+        .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
     ]);
 
-    // Auto-heal mismatches (for older records where backend wasn't setting it automatically)
+    const total = Number(countResult[0]?.count || 0);
+    const salesRows = salesRaw.map(r => ({
+      id: r.id, saleNumber: r.saleNumber, customerId: r.customerId, createdById: r.createdById,
+      quotationId: r.quotationId, status: r.status, paymentStatus: r.paymentStatus,
+      subTotal: r.subTotal, discountAmount: r.discountAmount, taxAmount: r.taxAmount,
+      totalAmount: r.totalAmount, paidAmount: r.paidAmount, balanceAmount: r.balanceAmount,
+      notes: r.notes, invoiceUrl: r.invoiceUrl, saleDate: r.saleDate, createdAt: r.createdAt, updatedAt: r.updatedAt,
+      customer: r.customerId_ ? { id: r.customerId_, contactName: r.customerContactName, companyName: r.customerCompanyName, phone: r.customerPhone } : null,
+      createdBy: r.createdById_ ? { id: r.createdById_, firstName: r.createdByFirstName, lastName: r.createdByLastName } : null
+    }));
+
+    let itemsCountMap = {};
+    let paymentsCountMap = {};
+    if (salesRows.length > 0) {
+      const saleIds = salesRows.map(s => s.id);
+
+      const itemsCountList = await db.select({
+        saleId: schema.saleItems.saleId,
+        count: sql`count(*)`
+      })
+      .from(schema.saleItems)
+      .where(inArray(schema.saleItems.saleId, saleIds))
+      .groupBy(schema.saleItems.saleId);
+
+      itemsCountList.forEach(c => {
+        itemsCountMap[c.saleId] = Number(c.count || 0);
+      });
+
+      const paymentsCountList = await db.select({
+        saleId: schema.payments.saleId,
+        count: sql`count(*)`
+      })
+      .from(schema.payments)
+      .where(inArray(schema.payments.saleId, saleIds))
+      .groupBy(schema.payments.saleId);
+
+      paymentsCountList.forEach(c => {
+        paymentsCountMap[c.saleId] = Number(c.count || 0);
+      });
+    }
+
+    const sales = salesRows.map(s => ({
+      ...s,
+      _count: { items: itemsCountMap[s.id] || 0, payments: paymentsCountMap[s.id] || 0 }
+    }));
+
     const healIds = sales.filter(s => s.paymentStatus === 'PAID' && s.status !== 'COMPLETED').map(s => s.id);
     if (healIds.length > 0) {
-      await prisma.sale.updateMany({
-        where: { id: { in: healIds } },
-        data: { status: 'COMPLETED' }
-      });
-      // reflect changes locally before responding
+      await db.update(schema.sales)
+        .set({ status: 'COMPLETED' })
+        .where(inArray(schema.sales.id, healIds));
       sales.forEach(s => {
         if (healIds.includes(s.id)) s.status = 'COMPLETED';
       });
@@ -579,20 +647,97 @@ exports.getSaleById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const sale = await prisma.sale.findUnique({
-      where: { id },
-      include: {
-        customer: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true, email: true } },
-        items: { include: { product: true } },
-        payments: { orderBy: { paymentDate: 'desc' } },
-        quotation: { select: { id: true, quotationNumber: true } }
-      }
-    });
+    const saleRows = await db.select({
+      id: schema.sales.id,
+      saleNumber: schema.sales.saleNumber,
+      customerId: schema.sales.customerId,
+      createdById: schema.sales.createdById,
+      quotationId: schema.sales.quotationId,
+      status: schema.sales.status,
+      paymentStatus: schema.sales.paymentStatus,
+      subTotal: schema.sales.subTotal,
+      discountAmount: schema.sales.discountAmount,
+      taxAmount: schema.sales.taxAmount,
+      totalAmount: schema.sales.totalAmount,
+      paidAmount: schema.sales.paidAmount,
+      balanceAmount: schema.sales.balanceAmount,
+      notes: schema.sales.notes,
+      invoiceUrl: schema.sales.invoiceUrl,
+      saleDate: schema.sales.saleDate,
+      createdAt: schema.sales.createdAt,
+      updatedAt: schema.sales.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      customerPhone: schema.customers.phone,
+      customerEmail: schema.customers.email,
+      customerAddress: schema.customers.address,
+      customerCity: schema.customers.city,
+      customerState: schema.customers.state,
+      customerPinCode: schema.customers.pinCode,
+      customerGstNumber: schema.customers.gstNumber,
+      createdById_: schema.users.id,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName,
+      createdByEmail: schema.users.email,
+      quotationId_: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber
+    })
+    .from(schema.sales)
+    .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.sales.createdById, schema.users.id))
+    .leftJoin(schema.quotations, eq(schema.sales.quotationId, schema.quotations.id))
+    .where(eq(schema.sales.id, id))
+    .limit(1);
 
-    if (!sale) {
+    if (saleRows.length === 0) {
       return res.status(404).json({ success: false, message: 'Sale not found' });
     }
+    const rawSale = saleRows[0];
+    const sale = {
+      id: rawSale.id, saleNumber: rawSale.saleNumber, customerId: rawSale.customerId, createdById: rawSale.createdById,
+      quotationId: rawSale.quotationId, status: rawSale.status, paymentStatus: rawSale.paymentStatus,
+      subTotal: rawSale.subTotal, discountAmount: rawSale.discountAmount, taxAmount: rawSale.taxAmount,
+      totalAmount: rawSale.totalAmount, paidAmount: rawSale.paidAmount, balanceAmount: rawSale.balanceAmount,
+      notes: rawSale.notes, invoiceUrl: rawSale.invoiceUrl, saleDate: rawSale.saleDate,
+      createdAt: rawSale.createdAt, updatedAt: rawSale.updatedAt,
+      customer: rawSale.customerId_ ? { id: rawSale.customerId_, contactName: rawSale.customerContactName, companyName: rawSale.customerCompanyName, phone: rawSale.customerPhone, email: rawSale.customerEmail, address: rawSale.customerAddress, city: rawSale.customerCity, state: rawSale.customerState, pinCode: rawSale.customerPinCode, gstNumber: rawSale.customerGstNumber } : null,
+      createdBy: rawSale.createdById_ ? { id: rawSale.createdById_, firstName: rawSale.createdByFirstName, lastName: rawSale.createdByLastName, email: rawSale.createdByEmail } : null,
+      quotation: rawSale.quotationId_ ? { id: rawSale.quotationId_, quotationNumber: rawSale.quotationNumber } : null
+    };
+
+    const items = await db.select({
+      id: schema.saleItems.id,
+      saleId: schema.saleItems.saleId,
+      productId: schema.saleItems.productId,
+      description: schema.saleItems.description,
+      quantity: schema.saleItems.quantity,
+      unitPrice: schema.saleItems.unitPrice,
+      discount: schema.saleItems.discount,
+      taxRate: schema.saleItems.taxRate,
+      totalPrice: schema.saleItems.totalPrice,
+      productId_: schema.products.id,
+      productName: schema.products.name,
+      productHsnCode: schema.products.hsnCode,
+      productUnitOfMeasure: schema.products.unitOfMeasure
+    })
+    .from(schema.saleItems)
+    .leftJoin(schema.products, eq(schema.saleItems.productId, schema.products.id))
+    .where(eq(schema.saleItems.saleId, sale.id))
+    .orderBy(asc(schema.saleItems.id));
+
+    sale.items = items.map(i => ({
+      id: i.id, saleId: i.saleId, productId: i.productId, description: i.description,
+      quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, totalPrice: i.totalPrice,
+      product: i.productId_ ? { id: i.productId_, name: i.productName, hsnCode: i.productHsnCode, unitOfMeasure: i.productUnitOfMeasure } : null
+    }));
+
+    const payments = await db.select()
+      .from(schema.payments)
+      .where(eq(schema.payments.saleId, sale.id))
+      .orderBy(desc(schema.payments.paymentDate));
+
+    sale.payments = payments;
 
     res.json({ success: true, data: sale });
   } catch (error) {
@@ -613,40 +758,43 @@ exports.createSale = async (req, res) => {
       notes
     } = req.body;
 
-    // Validate customer
-    const customer = await prisma.customer.findUnique({ where: { id: customerId } });
-    if (!customer) {
+    const customerRows = await db.select().from(schema.customers).where(eq(schema.customers.id, customerId)).limit(1);
+    if (customerRows.length === 0) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    // ── Guard: one sale per quotation (only if this is a quotation conversion) ──
     if (quotationId) {
-      const existingSale = await prisma.sale.findFirst({
-        where: { quotationId },
-        select: { id: true, saleNumber: true, createdAt: true }
-      });
-      if (existingSale) {
+      const existingSaleRows = await db.select({
+        id: schema.sales.id,
+        saleNumber: schema.sales.saleNumber,
+        createdAt: schema.sales.createdAt
+      })
+      .from(schema.sales)
+      .where(eq(schema.sales.quotationId, quotationId))
+      .limit(1);
+
+      if (existingSaleRows.length > 0) {
         return res.status(409).json({
           success: false,
-          message: `This quotation has already been converted to Sale ${existingSale.saleNumber}. A quotation can only be converted once.`,
-          existingSaleId: existingSale.id
+          message: `This quotation has already been converted to Sale ${existingSaleRows[0].saleNumber}. A quotation can only be converted once.`,
+          existingSaleId: existingSaleRows[0].id
         });
       }
     }
 
-    // Calculate totals
     let subTotal = 0;
     const saleItems = items.map(item => {
       const lineTotal = item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100);
       subTotal += lineTotal;
       return {
+        id: randomUUID(),
         productId: item.productId,
         description: item.description || null,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        discount: item.discount || 0,
-        taxRate: item.taxRate || 18,
-        totalPrice: lineTotal
+        quantity: String(item.quantity),
+        unitPrice: String(item.unitPrice),
+        discount: String(item.discount || 0),
+        taxRate: String(item.taxRate || 18),
+        totalPrice: String(lineTotal)
       };
     });
 
@@ -657,58 +805,64 @@ exports.createSale = async (req, res) => {
 
     const saleNumber = await generateSaleNumber();
 
-    // paymentTerms and expectedDelivery are not in the Sale schema;
-    // store them in the notes field so the invoice builder can read them
     let fullNotes = notes || '';
     if (paymentTerms) fullNotes += (fullNotes ? '\n' : '') + `Payment Terms: ${paymentTerms}`;
     if (expectedDelivery) fullNotes += (fullNotes ? '\n' : '') + `Expected Delivery: ${new Date(expectedDelivery).toLocaleDateString('en-IN')}`;
 
-    // ── Run everything inside a transaction so the sale is only committed
-    //    when the quotation is successfully marked as CONVERTED_TO_SALE ──
-    const sale = await prisma.$transaction(async (tx) => {
-      // If converting a quotation, lock-check it first (re-check inside tx)
+    const saleId = randomUUID();
+    const now = new Date();
+
+    const saleData = {
+      id: saleId,
+      saleNumber,
+      customerId,
+      createdById: req.user.id,
+      quotationId: quotationId || null,
+      subTotal: String(subTotal),
+      discountAmount: String(discountAmt),
+      taxAmount: String(taxAmount),
+      totalAmount: String(totalAmount),
+      balanceAmount: String(totalAmount),
+      notes: fullNotes || null,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const sale = await db.transaction(async (tx) => {
       if (quotationId) {
-        const quot = await tx.quotation.findUnique({
-          where: { id: quotationId },
-          select: { id: true, status: true }
-        });
+        const quotRows = await tx.select({
+          id: schema.quotations.id,
+          status: schema.quotations.status
+        })
+        .from(schema.quotations)
+        .where(eq(schema.quotations.id, quotationId))
+        .limit(1);
+
+        const quot = quotRows[0];
         if (!quot) throw new Error('Quotation not found.');
         if (quot.status === 'CONVERTED_TO_SALE') {
           throw new Error('This quotation has already been converted to a sale.');
         }
       }
 
-      const newSale = await tx.sale.create({
-        data: {
-          saleNumber,
-          customerId,
-          createdById: req.user.id,
-          quotationId: quotationId || null,
-          subTotal,
-          discountAmount: discountAmt,
-          taxAmount,
-          totalAmount,
-          balanceAmount: totalAmount,
-          notes: fullNotes || null,
-          items: { create: saleItems }
-        },
-        include: {
-          customer: true,
-          createdBy: { select: { id: true, firstName: true, lastName: true } },
-          items: { include: { product: true } },
-          payments: true
-        }
-      });
+      await tx.insert(schema.sales).values(saleData);
 
-      // Mark the quotation as converted — uses the relation (sales[]), NOT a saleId column
+      const itemsWithSaleId = saleItems.map(i => ({
+        ...i,
+        saleId
+      }));
+      await tx.insert(schema.saleItems).values(itemsWithSaleId);
+
       if (quotationId) {
-        await tx.quotation.update({
-          where: { id: quotationId },
-          data: { status: 'CONVERTED_TO_SALE' }
-        });
+        await tx.update(schema.quotations)
+          .set({ status: 'CONVERTED_TO_SALE' })
+          .where(eq(schema.quotations.id, quotationId));
       }
 
-      return newSale;
+      return {
+        ...saleData,
+        items: itemsWithSaleId
+      };
     });
 
     const ioRefresh = req.app.get('io');
@@ -717,13 +871,10 @@ exports.createSale = async (req, res) => {
       ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    // Fire-and-forget: refresh this employee's targets in the background.
-    // Does not block the HTTP response. Errors are caught and logged internally.
     triggerRefreshForEmployee(req.user.id, ioRefresh);
 
     res.status(201).json({ success: true, data: sale });
   } catch (error) {
-    // Surface transaction-level validation errors as 409
     if (
       error.message.includes('already been converted') ||
       error.message.includes('Quotation not found')
@@ -738,26 +889,97 @@ exports.createSale = async (req, res) => {
 exports.updateSale = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, paymentTerms, expectedDelivery, notes } = req.body;
+    const { status, notes } = req.body;
 
-    const sale = await prisma.sale.findUnique({ where: { id } });
-    if (!sale) {
+    const saleRows = await db.select().from(schema.sales).where(eq(schema.sales.id, id)).limit(1);
+    if (saleRows.length === 0) {
       return res.status(404).json({ success: false, message: 'Sale not found' });
     }
 
-    const updated = await prisma.sale.update({
-      where: { id },
-      data: {
-        ...(status && { status }),
-        ...(notes !== undefined && { notes })
-      },
-      include: {
-        customer: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true } },
-        items: { include: { product: true } },
-        payments: true
-      }
-    });
+    const updateData = { updatedAt: new Date() };
+    if (status) updateData.status = status;
+    if (notes !== undefined) updateData.notes = notes;
+
+    await db.update(schema.sales).set(updateData).where(eq(schema.sales.id, id));
+
+    const updatedRaw = await db.select({
+      id: schema.sales.id,
+      saleNumber: schema.sales.saleNumber,
+      customerId: schema.sales.customerId,
+      createdById: schema.sales.createdById,
+      quotationId: schema.sales.quotationId,
+      status: schema.sales.status,
+      paymentStatus: schema.sales.paymentStatus,
+      subTotal: schema.sales.subTotal,
+      discountAmount: schema.sales.discountAmount,
+      taxAmount: schema.sales.taxAmount,
+      totalAmount: schema.sales.totalAmount,
+      paidAmount: schema.sales.paidAmount,
+      balanceAmount: schema.sales.balanceAmount,
+      notes: schema.sales.notes,
+      invoiceUrl: schema.sales.invoiceUrl,
+      saleDate: schema.sales.saleDate,
+      createdAt: schema.sales.createdAt,
+      updatedAt: schema.sales.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      customerPhone: schema.customers.phone,
+      createdById_: schema.users.id,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.sales)
+    .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.sales.createdById, schema.users.id))
+    .where(eq(schema.sales.id, id))
+    .limit(1);
+
+    if (updatedRaw.length === 0) {
+      return res.status(404).json({ success: false, message: 'Sale not found' });
+    }
+    const rU = updatedRaw[0];
+    const completeUpdated = {
+      id: rU.id, saleNumber: rU.saleNumber, customerId: rU.customerId, createdById: rU.createdById,
+      quotationId: rU.quotationId, status: rU.status, paymentStatus: rU.paymentStatus,
+      subTotal: rU.subTotal, discountAmount: rU.discountAmount, taxAmount: rU.taxAmount,
+      totalAmount: rU.totalAmount, paidAmount: rU.paidAmount, balanceAmount: rU.balanceAmount,
+      notes: rU.notes, invoiceUrl: rU.invoiceUrl, saleDate: rU.saleDate, createdAt: rU.createdAt, updatedAt: rU.updatedAt,
+      customer: rU.customerId_ ? { id: rU.customerId_, contactName: rU.customerContactName, companyName: rU.customerCompanyName, phone: rU.customerPhone } : null,
+      createdBy: rU.createdById_ ? { id: rU.createdById_, firstName: rU.createdByFirstName, lastName: rU.createdByLastName } : null
+    };
+
+    const itemsRaw = await db.select({
+      id: schema.saleItems.id,
+      saleId: schema.saleItems.saleId,
+      productId: schema.saleItems.productId,
+      description: schema.saleItems.description,
+      quantity: schema.saleItems.quantity,
+      unitPrice: schema.saleItems.unitPrice,
+      discount: schema.saleItems.discount,
+      taxRate: schema.saleItems.taxRate,
+      totalPrice: schema.saleItems.totalPrice,
+      productId_: schema.products.id,
+      productName: schema.products.name,
+      productHsnCode: schema.products.hsnCode
+    })
+    .from(schema.saleItems)
+    .leftJoin(schema.products, eq(schema.saleItems.productId, schema.products.id))
+    .where(eq(schema.saleItems.saleId, id))
+    .orderBy(asc(schema.saleItems.id));
+
+    completeUpdated.items = itemsRaw.map(i => ({
+      id: i.id, saleId: i.saleId, productId: i.productId, description: i.description,
+      quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, totalPrice: i.totalPrice,
+      product: i.productId_ ? { id: i.productId_, name: i.productName, hsnCode: i.productHsnCode } : null
+    }));
+
+    const payments = await db.select()
+      .from(schema.payments)
+      .where(eq(schema.payments.saleId, id))
+      .orderBy(desc(schema.payments.paymentDate));
+
+    completeUpdated.payments = payments;
 
     const ioRefresh = req.app.get('io');
     if (ioRefresh) {
@@ -765,7 +987,7 @@ exports.updateSale = async (req, res) => {
       ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: completeUpdated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -777,17 +999,52 @@ exports.recordPayment = async (req, res) => {
     const { id } = req.params;
     const { amount, paymentMethod, paymentDate, referenceNumber, notes } = req.body;
 
-    const sale = await prisma.sale.findUnique({
-      where: { id },
-      include: {
-        customer: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true } }
-      }
-    });
+    const saleRawRows = await db.select({
+      id: schema.sales.id,
+      saleNumber: schema.sales.saleNumber,
+      customerId: schema.sales.customerId,
+      createdById: schema.sales.createdById,
+      quotationId: schema.sales.quotationId,
+      status: schema.sales.status,
+      paymentStatus: schema.sales.paymentStatus,
+      subTotal: schema.sales.subTotal,
+      discountAmount: schema.sales.discountAmount,
+      taxAmount: schema.sales.taxAmount,
+      totalAmount: schema.sales.totalAmount,
+      paidAmount: schema.sales.paidAmount,
+      balanceAmount: schema.sales.balanceAmount,
+      notes: schema.sales.notes,
+      invoiceUrl: schema.sales.invoiceUrl,
+      saleDate: schema.sales.saleDate,
+      createdAt: schema.sales.createdAt,
+      updatedAt: schema.sales.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      customerPhone: schema.customers.phone,
+      createdById_: schema.users.id,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.sales)
+    .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.sales.createdById, schema.users.id))
+    .where(eq(schema.sales.id, id))
+    .limit(1);
 
-    if (!sale) {
+    if (saleRawRows.length === 0) {
       return res.status(404).json({ success: false, message: 'Sale not found' });
     }
+    const rS = saleRawRows[0];
+    const sale = {
+      id: rS.id, saleNumber: rS.saleNumber, customerId: rS.customerId, createdById: rS.createdById,
+      quotationId: rS.quotationId, status: rS.status, paymentStatus: rS.paymentStatus,
+      subTotal: rS.subTotal, discountAmount: rS.discountAmount, taxAmount: rS.taxAmount,
+      totalAmount: rS.totalAmount, paidAmount: rS.paidAmount, balanceAmount: rS.balanceAmount,
+      notes: rS.notes, invoiceUrl: rS.invoiceUrl, saleDate: rS.saleDate, createdAt: rS.createdAt, updatedAt: rS.updatedAt,
+      customer: rS.customerId_ ? { id: rS.customerId_, contactName: rS.customerContactName, companyName: rS.customerCompanyName, phone: rS.customerPhone } : null,
+      createdBy: rS.createdById_ ? { id: rS.createdById_, firstName: rS.createdByFirstName, lastName: rS.createdByLastName } : null
+    };
 
     const paymentAmount = parseFloat(amount);
     const newPaidAmount = Number(sale.paidAmount) + paymentAmount;
@@ -799,41 +1056,82 @@ exports.recordPayment = async (req, res) => {
 
     const receiptNumber = await generateReceiptNumber();
 
-    // Create payment record
-    const payment = await prisma.payment.create({
-      data: {
-        saleId: id,
-        amount: paymentAmount,
-        paymentMethod,
-        paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
-        referenceNumber,
-        notes
-      }
-    });
+    const paymentId = randomUUID();
+    const paymentData = {
+      id: paymentId,
+      saleId: id,
+      amount: String(paymentAmount),
+      paymentMethod,
+      paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
+      referenceNumber: referenceNumber || null,
+      notes: notes || null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
-    // Update sale amounts + auto-advance status when fully paid
-    const updatedSale = await prisma.sale.update({
-      where: { id },
-      data: {
-        paidAmount: newPaidAmount,
-        balanceAmount: Math.max(0, newBalance),
-        paymentStatus: newPaymentStatus,
-        // Auto-mark sale as COMPLETED when payment is full
-        ...(newPaymentStatus === 'PAID' && sale.status !== 'COMPLETED' && { status: 'COMPLETED' })
-      },
-      include: {
-        customer: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true } }
-      }
-    });
+    await db.insert(schema.payments).values(paymentData);
 
-    // Generate Receipt PDF
+    const updatedSaleData = {
+      paidAmount: String(newPaidAmount),
+      balanceAmount: String(Math.max(0, newBalance)),
+      paymentStatus: newPaymentStatus,
+      updatedAt: new Date()
+    };
+    if (newPaymentStatus === 'PAID' && sale.status !== 'COMPLETED') {
+      updatedSaleData.status = 'COMPLETED';
+    }
+
+    await db.update(schema.sales).set(updatedSaleData).where(eq(schema.sales.id, id));
+
+    const updatedSaleRawRows = await db.select({
+      id: schema.sales.id,
+      saleNumber: schema.sales.saleNumber,
+      customerId: schema.sales.customerId,
+      createdById: schema.sales.createdById,
+      quotationId: schema.sales.quotationId,
+      status: schema.sales.status,
+      paymentStatus: schema.sales.paymentStatus,
+      subTotal: schema.sales.subTotal,
+      discountAmount: schema.sales.discountAmount,
+      taxAmount: schema.sales.taxAmount,
+      totalAmount: schema.sales.totalAmount,
+      paidAmount: schema.sales.paidAmount,
+      balanceAmount: schema.sales.balanceAmount,
+      notes: schema.sales.notes,
+      invoiceUrl: schema.sales.invoiceUrl,
+      saleDate: schema.sales.saleDate,
+      createdAt: schema.sales.createdAt,
+      updatedAt: schema.sales.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      customerPhone: schema.customers.phone,
+      createdById_: schema.users.id,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.sales)
+    .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.sales.createdById, schema.users.id))
+    .where(eq(schema.sales.id, id))
+    .limit(1);
+
+    const updatedSale = updatedSaleRawRows[0] ? {
+      id: updatedSaleRawRows[0].id, saleNumber: updatedSaleRawRows[0].saleNumber, customerId: updatedSaleRawRows[0].customerId, createdById: updatedSaleRawRows[0].createdById,
+      quotationId: updatedSaleRawRows[0].quotationId, status: updatedSaleRawRows[0].status, paymentStatus: updatedSaleRawRows[0].paymentStatus,
+      subTotal: updatedSaleRawRows[0].subTotal, discountAmount: updatedSaleRawRows[0].discountAmount, taxAmount: updatedSaleRawRows[0].taxAmount,
+      totalAmount: updatedSaleRawRows[0].totalAmount, paidAmount: updatedSaleRawRows[0].paidAmount, balanceAmount: updatedSaleRawRows[0].balanceAmount,
+      notes: updatedSaleRawRows[0].notes, invoiceUrl: updatedSaleRawRows[0].invoiceUrl, saleDate: updatedSaleRawRows[0].saleDate, createdAt: updatedSaleRawRows[0].createdAt, updatedAt: updatedSaleRawRows[0].updatedAt,
+      customer: updatedSaleRawRows[0].customerId_ ? { id: updatedSaleRawRows[0].customerId_, contactName: updatedSaleRawRows[0].customerContactName, companyName: updatedSaleRawRows[0].customerCompanyName, phone: updatedSaleRawRows[0].customerPhone } : null,
+      createdBy: updatedSaleRawRows[0].createdById_ ? { id: updatedSaleRawRows[0].createdById_, firstName: updatedSaleRawRows[0].createdByFirstName, lastName: updatedSaleRawRows[0].createdByLastName } : null
+    } : null;
+
     try {
       const receiptDir = path.join(__dirname, '../../uploads/receipts');
       ensureDir(receiptDir);
       const receiptPath = path.join(receiptDir, `${receiptNumber}.pdf`);
 
-      const paymentWithNumber = { ...payment, receiptNumber };
+      const paymentWithNumber = { ...paymentData, receiptNumber };
       const html = buildReceiptHTML(paymentWithNumber, updatedSale);
 
       const browser = await puppeteer.launch({
@@ -845,37 +1143,37 @@ exports.recordPayment = async (req, res) => {
       await page.pdf({ path: receiptPath, format: 'A5', printBackground: true });
       await browser.close();
 
-      // Save receipt URL to payment
-      await prisma.payment.update({
-        where: { id: payment.id },
-        data: { receiptUrl: `/uploads/receipts/${receiptNumber}.pdf` }
-      });
+      await db.update(schema.payments)
+        .set({ receiptUrl: `/uploads/receipts/${receiptNumber}.pdf` })
+        .where(eq(schema.payments.id, paymentId));
+
+      paymentData.receiptUrl = `/uploads/receipts/${receiptNumber}.pdf`;
     } catch (pdfErr) {
       console.error('Receipt PDF error:', pdfErr.message);
-      // Don't fail the whole request if PDF fails
     }
 
-    // Emit Socket.IO notification
     const io = req.app.get('io');
-    io.emit('notification', {
+    if (io) {
+      io.emit('notification', {
+        type: 'PAYMENT_RECEIVED',
+        title: 'Payment Received',
+        body: `₹${paymentAmount.toLocaleString('en-IN')} received for ${sale.saleNumber}`,
+        entityType: 'sale',
+        entityId: id,
+        targetUserId: sale.createdById
+      });
+    }
+
+    await db.insert(schema.notifications).values({
+      id: randomUUID(),
+      userId: sale.createdById,
       type: 'PAYMENT_RECEIVED',
       title: 'Payment Received',
       body: `₹${paymentAmount.toLocaleString('en-IN')} received for ${sale.saleNumber}`,
       entityType: 'sale',
       entityId: id,
-      targetUserId: sale.createdById
-    });
-
-    // Persist notification
-    await prisma.notification.create({
-      data: {
-        userId: sale.createdById,
-        type: 'PAYMENT_RECEIVED',
-        title: 'Payment Received',
-        body: `₹${paymentAmount.toLocaleString('en-IN')} received for ${sale.saleNumber}`,
-        entityType: 'sale',
-        entityId: id
-      }
+      isRead: false,
+      createdAt: new Date()
     });
 
     if (io) {
@@ -885,44 +1183,115 @@ exports.recordPayment = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      data: { payment, updatedSale }
+      data: { payment: paymentData, updatedSale }
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// GET /api/sales/:id/invoice  — generate + download invoice PDF
+// GET /api/sales/:id/invoice
 exports.generateInvoice = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const sale = await prisma.sale.findUnique({
-      where: { id },
-      include: {
-        customer: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true } },
-        items: { include: { product: true } },
-        payments: true,
-        quotation: { select: { id: true, quotationNumber: true } }
-      }
-    });
+    const saleRawRows = await db.select({
+      id: schema.sales.id,
+      saleNumber: schema.sales.saleNumber,
+      customerId: schema.sales.customerId,
+      createdById: schema.sales.createdById,
+      quotationId: schema.sales.quotationId,
+      status: schema.sales.status,
+      paymentStatus: schema.sales.paymentStatus,
+      subTotal: schema.sales.subTotal,
+      discountAmount: schema.sales.discountAmount,
+      taxAmount: schema.sales.taxAmount,
+      totalAmount: schema.sales.totalAmount,
+      paidAmount: schema.sales.paidAmount,
+      balanceAmount: schema.sales.balanceAmount,
+      notes: schema.sales.notes,
+      invoiceUrl: schema.sales.invoiceUrl,
+      saleDate: schema.sales.saleDate,
+      createdAt: schema.sales.createdAt,
+      updatedAt: schema.sales.updatedAt,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      customerPhone: schema.customers.phone,
+      customerEmail: schema.customers.email,
+      customerAddress: schema.customers.address,
+      customerCity: schema.customers.city,
+      customerState: schema.customers.state,
+      customerPinCode: schema.customers.pinCode,
+      customerGstNumber: schema.customers.gstNumber,
+      createdById_: schema.users.id,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName,
+      quotationId_: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber
+    })
+    .from(schema.sales)
+    .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.sales.createdById, schema.users.id))
+    .leftJoin(schema.quotations, eq(schema.sales.quotationId, schema.quotations.id))
+    .where(eq(schema.sales.id, id))
+    .limit(1);
 
+    const sale = saleRawRows[0];
     if (!sale) {
       return res.status(404).json({ success: false, message: 'Sale not found' });
     }
 
-    // Extract paymentTerms stored in notes (e.g. "Payment Terms: 30 days")
-    const notesText = sale.notes || '';
-    const ptMatch = notesText.match(/Payment Terms:\s*(.+)/i);
-    sale.paymentTerms = ptMatch ? ptMatch[1].trim() : null;
+    const reconstructedSale = {
+      id: sale.id, saleNumber: sale.saleNumber, customerId: sale.customerId, createdById: sale.createdById,
+      quotationId: sale.quotationId, status: sale.status, paymentStatus: sale.paymentStatus,
+      subTotal: sale.subTotal, discountAmount: sale.discountAmount, taxAmount: sale.taxAmount,
+      totalAmount: sale.totalAmount, paidAmount: sale.paidAmount, balanceAmount: sale.balanceAmount,
+      notes: sale.notes, invoiceUrl: sale.invoiceUrl, saleDate: sale.saleDate, createdAt: sale.createdAt, updatedAt: sale.updatedAt,
+      customer: sale.customerId_ ? {
+        id: sale.customerId_, contactName: sale.customerContactName, companyName: sale.customerCompanyName,
+        phone: sale.customerPhone, email: sale.customerEmail, address: sale.customerAddress,
+        city: sale.customerCity, state: sale.customerState, pinCode: sale.customerPinCode, gstNumber: sale.customerGstNumber
+      } : null,
+      createdBy: sale.createdById_ ? { id: sale.createdById_, firstName: sale.createdByFirstName, lastName: sale.createdByLastName } : null,
+      quotation: sale.quotationId_ ? { id: sale.quotationId_, quotationNumber: sale.quotationNumber } : null
+    };
 
-    const html = buildInvoiceHTML(sale);
+    const itemsRaw = await db.select({
+      id: schema.saleItems.id,
+      saleId: schema.saleItems.saleId,
+      productId: schema.saleItems.productId,
+      description: schema.saleItems.description,
+      quantity: schema.saleItems.quantity,
+      unitPrice: schema.saleItems.unitPrice,
+      discount: schema.saleItems.discount,
+      taxRate: schema.saleItems.taxRate,
+      totalPrice: schema.saleItems.totalPrice,
+      productId_: schema.products.id,
+      productName: schema.products.name,
+      productHsnCode: schema.products.hsnCode,
+      productUnitOfMeasure: schema.products.unitOfMeasure
+    })
+    .from(schema.saleItems)
+    .leftJoin(schema.products, eq(schema.saleItems.productId, schema.products.id))
+    .where(eq(schema.saleItems.saleId, reconstructedSale.id))
+    .orderBy(asc(schema.saleItems.id));
+
+    reconstructedSale.items = itemsRaw.map(i => ({
+      id: i.id, saleId: i.saleId, productId: i.productId, description: i.description,
+      quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, totalPrice: i.totalPrice,
+      product: i.productId_ ? { id: i.productId_, name: i.productName, hsnCode: i.productHsnCode, unitOfMeasure: i.productUnitOfMeasure } : null
+    }));
+
+    const notesText = reconstructedSale.notes || '';
+    const ptMatch = notesText.match(/Payment Terms:\s*(.+)/i);
+    reconstructedSale.paymentTerms = ptMatch ? ptMatch[1].trim() : null;
+
+    const html = buildInvoiceHTML(reconstructedSale);
 
     const invoiceDir = path.join(__dirname, '../../uploads/invoices');
     ensureDir(invoiceDir);
-    // Use a safe filename (saleNumber may contain slashes like INV/25-26/001)
-    const safeFilename = sale.saleNumber.replace(/\//g, '_');
+    const safeFilename = reconstructedSale.saleNumber.replace(/\//g, '_');
     const invoicePath = path.join(invoiceDir, `${safeFilename}.pdf`);
 
     const browser = await puppeteer.launch({
@@ -934,11 +1303,9 @@ exports.generateInvoice = async (req, res) => {
     await page.pdf({ path: invoicePath, format: 'A4', printBackground: true });
     await browser.close();
 
-    // Save invoice URL
-    await prisma.sale.update({
-      where: { id },
-      data: { invoiceUrl: `/uploads/invoices/${safeFilename}.pdf` }
-    });
+    await db.update(schema.sales)
+      .set({ invoiceUrl: `/uploads/invoices/${safeFilename}.pdf` })
+      .where(eq(schema.sales.id, id));
 
     res.download(invoicePath, `Invoice-${safeFilename}.pdf`);
   } catch (error) {
@@ -948,31 +1315,68 @@ exports.generateInvoice = async (req, res) => {
 };
 
 // GET /api/sales/product-summary
-// Returns each product with: totalSales count, totalQty, totalRevenue
 exports.getSalesByProduct = async (req, res) => {
   try {
-    const where = {};
-    if (req.user.role === 'EMPLOYEE') where.sale = { createdById: req.user.id };
+    const conditions = [];
+    if (req.user.role === 'EMPLOYEE') {
+      conditions.push(eq(schema.sales.createdById, req.user.id));
+    }
 
-    const items = await prisma.saleItem.findMany({
-      where,
-      include: {
-        product: { select: { id: true, name: true, hsnCode: true } },
-        sale: { 
-          select: { 
-            id: true, 
-            saleNumber: true, 
-            saleDate: true, 
-            totalAmount: true, 
-            status: true, 
-            paymentStatus: true,
-            customer: { select: { contactName: true } }
-          } 
-        }
-      }
-    });
+    const itemsRaw = await db.select({
+      id: schema.saleItems.id,
+      saleId: schema.saleItems.saleId,
+      productId: schema.saleItems.productId,
+      description: schema.saleItems.description,
+      quantity: schema.saleItems.quantity,
+      unitPrice: schema.saleItems.unitPrice,
+      discount: schema.saleItems.discount,
+      taxRate: schema.saleItems.taxRate,
+      totalPrice: schema.saleItems.totalPrice,
+      productId_: schema.products.id,
+      productName: schema.products.name,
+      productHsnCode: schema.products.hsnCode,
+      saleId_: schema.sales.id,
+      saleNumber: schema.sales.saleNumber,
+      saleDate: schema.sales.saleDate,
+      saleTotalAmount: schema.sales.totalAmount,
+      saleStatus: schema.sales.status,
+      salePaymentStatus: schema.sales.paymentStatus,
+      customerContactName: schema.customers.contactName
+    })
+    .from(schema.saleItems)
+    .leftJoin(schema.products, eq(schema.saleItems.productId, schema.products.id))
+    .leftJoin(schema.sales, eq(schema.saleItems.saleId, schema.sales.id))
+    .leftJoin(schema.customers, eq(schema.sales.customerId, schema.customers.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined);
 
-    // Group by product
+    const items = itemsRaw.map(i => ({
+      id: i.id,
+      saleId: i.saleId,
+      productId: i.productId,
+      description: i.description,
+      quantity: i.quantity,
+      unitPrice: i.unitPrice,
+      discount: i.discount,
+      taxRate: i.taxRate,
+      totalPrice: i.totalPrice,
+      product: i.productId_ ? {
+        id: i.productId_,
+        name: i.productName,
+        hsnCode: i.productHsnCode
+      } : null,
+      sale: i.saleId_ ? {
+        id: i.saleId_,
+        saleNumber: i.saleNumber,
+        saleDate: i.saleDate,
+        totalAmount: i.saleTotalAmount,
+        status: i.saleStatus,
+        paymentStatus: i.salePaymentStatus,
+        customer: i.customerContactName ? {
+          contactName: i.customerContactName
+        } : null
+      } : null
+    }));
+
     const map = new Map();
     for (const item of items) {
       const key = item.productId;
@@ -994,7 +1398,6 @@ exports.getSalesByProduct = async (req, res) => {
       entry.totalQty += Number(item.quantity);
       entry.totalRevenue += Number(item.totalPrice);
       
-      // Keep track of which sales contributed to this product
       if (item.sale) {
         entry.documents.push({
           id: item.sale.id,

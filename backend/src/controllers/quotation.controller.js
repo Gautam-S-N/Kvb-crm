@@ -1,8 +1,10 @@
-const prisma = require('../utils/db');
+const { eq, and, or, like, inArray, sql, desc, asc } = require('drizzle-orm');
+const { db } = require('../utils/drizzle');
+const schema = require('../models/schema');
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const { numberToWords } = require('../utils/numberToWords');
 const { triggerRefreshForEmployee } = require('../services/achievement.service');
 
@@ -22,26 +24,25 @@ const formatDateDDMMYY = (date = new Date()) => {
   return `${d}${m}${y}`;
 };
 
-// Generate structured quotation number via counter (raw SQL — no prisma generate needed)
+// Generate structured quotation number via counter
 const generateQuotationNumber = async (templateType = 'STANDARD') => {
   const productCode = PRODUCT_CODE_MAP[templateType] || 'STD';
+  const id = randomUUID();
   // Atomically increment
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
-     VALUES (?, ?, 1, NOW())
-     ON DUPLICATE KEY UPDATE counter = counter + 1, updatedAt = NOW()`,
-    uuidv4(), productCode
-  );
-  const [row] = await prisma.$queryRawUnsafe(
-    'SELECT counter FROM quotation_counters WHERE productCode = ?',
-    productCode
-  );
+  await db.execute(sql`
+    INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
+    VALUES (${id}, ${productCode}, 1, NOW())
+    ON DUPLICATE KEY UPDATE counter = counter + 1, updatedAt = NOW()
+  `);
+  const [row] = await db.select({ counter: schema.quotationCounters.counter })
+    .from(schema.quotationCounters)
+    .where(eq(schema.quotationCounters.productCode, productCode))
+    .limit(1);
   const dateStr = formatDateDDMMYY();
-  return `QTN.KVB.${productCode}.${String(Number(row.counter)).padStart(3, '0')}.A.${dateStr}`;
+  return `QTN.KVB.${productCode}.${String(Number(row?.counter || 1)).padStart(3, '0')}.A.${dateStr}`;
 };
 
-
-// â”€â”€â”€ Load company logo as Base64 (embedded in PDF â€” Puppeteer can't fetch URLs) â”€
+// Load company logo as Base64 (embedded in PDF)
 const getLogoBase64 = () => {
   const exts = ['png', 'jpg', 'jpeg', 'svg', 'webp'];
   const assetsDir = path.join(__dirname, '../assets');
@@ -56,52 +57,120 @@ const getLogoBase64 = () => {
   return null;
 };
 
-
 // Get all quotations
 exports.getQuotations = async (req, res) => {
   try {
     const { leadId, status, search, page = 1, limit = 100 } = req.query;
-    const where = {};
-    if (leadId) where.leadId = leadId;
-    if (status) where.status = status;
-    // Role-based filter: employees only see their own quotations
+    const conditions = [];
+
+    if (leadId) conditions.push(eq(schema.quotations.leadId, leadId));
+    if (status) conditions.push(eq(schema.quotations.status, status));
+    // Role-based filter
     if (req.user.role === 'EMPLOYEE') {
-      where.createdById = req.user.id;
+      conditions.push(eq(schema.quotations.createdById, req.user.id));
     }
 
     // Allow searching by quotation number or customer info
     if (search) {
-      where.OR = [
-        { quotationNumber: { contains: search } },
-        { customer: { contactName: { contains: search } } },
-        { customer: { companyName: { contains: search } } }
-      ];
+      conditions.push(
+        or(
+          like(schema.quotations.quotationNumber, `%${search}%`),
+          like(schema.customers.contactName, `%${search}%`),
+          like(schema.customers.companyName, `%${search}%`)
+        )
+      );
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const [quotations, total] = await Promise.all([
-      prisma.quotation.findMany({
-        where,
-        include: {
-          lead: { select: { leadNumber: true, title: true } },
-          customer: { select: { contactName: true, companyName: true } },
-          createdBy: { select: { firstName: true, lastName: true } },
-          _count: { select: { items: true } }
-        },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: parseInt(limit)
-      }),
-      prisma.quotation.count({ where })
-    ]);
+    const parsedPage = parseInt(page);
+    const parsedLimit = parseInt(limit);
+    const skip = (parsedPage - 1) * parsedLimit;
+
+    const totalResult = await db.select({ count: sql`count(*)` })
+      .from(schema.quotations)
+      .leftJoin(schema.customers, eq(schema.quotations.customerId, schema.customers.id))
+      .where(conditions.length > 0 ? and(...conditions) : undefined);
+    const total = Number(totalResult[0]?.count || 0);
+
+    const quotationsRaw = await db.select({
+      id: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber,
+      version: schema.quotations.version,
+      status: schema.quotations.status,
+      subTotal: schema.quotations.subTotal,
+      discountAmount: schema.quotations.discountAmount,
+      discountPercent: schema.quotations.discountPercent,
+      taxAmount: schema.quotations.taxAmount,
+      totalAmount: schema.quotations.totalAmount,
+      quotationDate: schema.quotations.quotationDate,
+      validUntil: schema.quotations.validUntil,
+      paymentTerms: schema.quotations.paymentTerms,
+      deliveryTerms: schema.quotations.deliveryTerms,
+      notes: schema.quotations.notes,
+      termsConditions: schema.quotations.termsConditions,
+      pdfUrl: schema.quotations.pdfUrl,
+      templateType: schema.quotations.templateType,
+      customFields: schema.quotations.customFields,
+      leadId: schema.quotations.leadId,
+      customerId: schema.quotations.customerId,
+      createdById: schema.quotations.createdById,
+      createdAt: schema.quotations.createdAt,
+      updatedAt: schema.quotations.updatedAt,
+      leadLeadNumber: schema.leads.leadNumber,
+      leadTitle: schema.leads.title,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.quotations)
+    .leftJoin(schema.leads, eq(schema.quotations.leadId, schema.leads.id))
+    .leftJoin(schema.customers, eq(schema.quotations.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.quotations.createdById, schema.users.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .orderBy(desc(schema.quotations.createdAt))
+    .limit(parsedLimit)
+    .offset(skip);
+
+    const quotationsRows = quotationsRaw.map(r => ({
+      id: r.id, quotationNumber: r.quotationNumber, version: r.version, status: r.status,
+      subTotal: r.subTotal, discountAmount: r.discountAmount, discountPercent: r.discountPercent,
+      taxAmount: r.taxAmount, totalAmount: r.totalAmount, quotationDate: r.quotationDate,
+      validUntil: r.validUntil, paymentTerms: r.paymentTerms, deliveryTerms: r.deliveryTerms,
+      notes: r.notes, termsConditions: r.termsConditions, pdfUrl: r.pdfUrl,
+      templateType: r.templateType, customFields: r.customFields,
+      leadId: r.leadId, customerId: r.customerId, createdById: r.createdById,
+      createdAt: r.createdAt, updatedAt: r.updatedAt,
+      lead: r.leadLeadNumber ? { leadNumber: r.leadLeadNumber, title: r.leadTitle } : null,
+      customer: r.customerContactName ? { contactName: r.customerContactName, companyName: r.customerCompanyName } : null,
+      createdBy: r.createdByFirstName ? { firstName: r.createdByFirstName, lastName: r.createdByLastName } : null
+    }));
+
+    // Fetch items counts
+    let itemsCountMap = {};
+    if (quotationsRows.length > 0) {
+      const qIds = quotationsRows.map(q => q.id);
+      const counts = await db.select({ quotationId: schema.quotationItems.quotationId, count: sql`count(*)` })
+        .from(schema.quotationItems)
+        .where(inArray(schema.quotationItems.quotationId, qIds))
+        .groupBy(schema.quotationItems.quotationId);
+      for (const item of counts) {
+        itemsCountMap[item.quotationId] = Number(item.count);
+      }
+    }
+
+    const formattedQuotations = quotationsRows.map(q => ({
+      ...q,
+      _count: { items: itemsCountMap[q.id] || 0 }
+    }));
+
     res.json({
       success: true,
-      data: quotations,
+      data: formattedQuotations,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: parsedPage,
+        limit: parsedLimit,
         total,
-        pages: Math.ceil(total / parseInt(limit))
+        pages: Math.ceil(total / parsedLimit)
       }
     });
   } catch (error) {
@@ -113,25 +182,107 @@ exports.getQuotations = async (req, res) => {
 exports.getQuotationById = async (req, res) => {
   try {
     const { id } = req.params;
-    const quotation = await prisma.quotation.findUnique({
-      where: { id },
-      include: {
-        lead: true,
-        customer: true,
-        createdBy: { select: { firstName: true, lastName: true, email: true } },
-        items: { include: { product: true } }
-      }
-    });
-    if (!quotation) {
+    const quotationsList = await db.select({
+      id: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber,
+      version: schema.quotations.version,
+      status: schema.quotations.status,
+      subTotal: schema.quotations.subTotal,
+      discountAmount: schema.quotations.discountAmount,
+      discountPercent: schema.quotations.discountPercent,
+      taxAmount: schema.quotations.taxAmount,
+      totalAmount: schema.quotations.totalAmount,
+      quotationDate: schema.quotations.quotationDate,
+      validUntil: schema.quotations.validUntil,
+      paymentTerms: schema.quotations.paymentTerms,
+      deliveryTerms: schema.quotations.deliveryTerms,
+      notes: schema.quotations.notes,
+      termsConditions: schema.quotations.termsConditions,
+      pdfUrl: schema.quotations.pdfUrl,
+      templateType: schema.quotations.templateType,
+      customFields: schema.quotations.customFields,
+      leadId: schema.quotations.leadId,
+      customerId: schema.quotations.customerId,
+      createdById: schema.quotations.createdById,
+      createdAt: schema.quotations.createdAt,
+      updatedAt: schema.quotations.updatedAt,
+      leadId_: schema.leads.id,
+      leadLeadNumber: schema.leads.leadNumber,
+      leadTitle: schema.leads.title,
+      customerId_: schema.customers.id,
+      customerContactName: schema.customers.contactName,
+      customerEmail: schema.customers.email,
+      customerPhone: schema.customers.phone,
+      customerCompanyName: schema.customers.companyName,
+      customerAddress: schema.customers.address,
+      customerCity: schema.customers.city,
+      customerState: schema.customers.state,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName,
+      createdByEmail: schema.users.email
+    })
+    .from(schema.quotations)
+    .leftJoin(schema.leads, eq(schema.quotations.leadId, schema.leads.id))
+    .leftJoin(schema.customers, eq(schema.quotations.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.quotations.createdById, schema.users.id))
+    .where(eq(schema.quotations.id, id))
+    .limit(1);
+
+    if (quotationsList.length === 0) {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
+    const rawQ = quotationsList[0];
+    const quotation = {
+      id: rawQ.id, quotationNumber: rawQ.quotationNumber, version: rawQ.version, status: rawQ.status,
+      subTotal: rawQ.subTotal, discountAmount: rawQ.discountAmount, discountPercent: rawQ.discountPercent,
+      taxAmount: rawQ.taxAmount, totalAmount: rawQ.totalAmount, quotationDate: rawQ.quotationDate,
+      validUntil: rawQ.validUntil, paymentTerms: rawQ.paymentTerms, deliveryTerms: rawQ.deliveryTerms,
+      notes: rawQ.notes, termsConditions: rawQ.termsConditions, pdfUrl: rawQ.pdfUrl,
+      templateType: rawQ.templateType, customFields: rawQ.customFields,
+      leadId: rawQ.leadId, customerId: rawQ.customerId, createdById: rawQ.createdById,
+      createdAt: rawQ.createdAt, updatedAt: rawQ.updatedAt,
+      lead: rawQ.leadId_ ? { id: rawQ.leadId_, leadNumber: rawQ.leadLeadNumber, title: rawQ.leadTitle } : null,
+      customer: rawQ.customerId_ ? { id: rawQ.customerId_, contactName: rawQ.customerContactName, email: rawQ.customerEmail, phone: rawQ.customerPhone, companyName: rawQ.customerCompanyName, address: rawQ.customerAddress, city: rawQ.customerCity, state: rawQ.customerState } : null,
+      createdBy: rawQ.createdByEmail ? { firstName: rawQ.createdByFirstName, lastName: rawQ.createdByLastName, email: rawQ.createdByEmail } : null
+    };
+
+    // Fetch items with products
+    const itemsRaw = await db.select({
+      id: schema.quotationItems.id,
+      quotationId: schema.quotationItems.quotationId,
+      productId: schema.quotationItems.productId,
+      description: schema.quotationItems.description,
+      quantity: schema.quotationItems.quantity,
+      unitPrice: schema.quotationItems.unitPrice,
+      discount: schema.quotationItems.discount,
+      taxRate: schema.quotationItems.taxRate,
+      totalPrice: schema.quotationItems.totalPrice,
+      productId_: schema.products.id,
+      productName: schema.products.name,
+      productSku: schema.products.sku,
+      productUnitOfMeasure: schema.products.unitOfMeasure,
+      productHsnCode: schema.products.hsnCode,
+      productDescription: schema.products.description
+    })
+    .from(schema.quotationItems)
+    .leftJoin(schema.products, eq(schema.quotationItems.productId, schema.products.id))
+    .where(eq(schema.quotationItems.quotationId, id));
+
+    const itemsMapped = itemsRaw.map(i => ({
+      id: i.id, quotationId: i.quotationId, productId: i.productId, description: i.description,
+      quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, totalPrice: i.totalPrice,
+      product: i.productId_ ? { id: i.productId_, name: i.productName, sku: i.productSku, unitOfMeasure: i.productUnitOfMeasure, hsnCode: i.productHsnCode, description: i.productDescription } : null
+    }));
+
+    quotation.items = itemsMapped;
+
     res.json({ success: true, data: quotation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// Create quotation â€” accepts templateType + customFields for product-specific formats
+// Create quotation
 exports.createQuotation = async (req, res) => {
   try {
     const {
@@ -144,36 +295,45 @@ exports.createQuotation = async (req, res) => {
       deliveryTerms,
       notes,
       termsConditions,
-      // Template system
       templateType = 'STANDARD',
       customFields = null,
-      // Reservation system
       reservationId = null,
       quotationNumber: providedNumber = null,
     } = req.body;
 
+    const leadRaw = await db.select({
+      id: schema.leads.id,
+      customerId: schema.leads.customerId,
+      leadNumber: schema.leads.leadNumber,
+      title: schema.leads.title,
+      leadCustomerContactName: schema.customers.contactName
+    })
+    .from(schema.leads)
+    .leftJoin(schema.customers, eq(schema.leads.customerId, schema.customers.id))
+    .where(eq(schema.leads.id, leadId))
+    .limit(1);
 
-    const lead = await prisma.lead.findUnique({
-      where: { id: leadId },
-      include: { customer: true }
-    });
+    const leadRow = leadRaw[0] || null;
+    const lead = leadRow ? { ...leadRow, customer: leadRow.leadCustomerContactName ? { contactName: leadRow.leadCustomerContactName } : null } : null;
+
     if (!lead) {
       return res.status(404).json({ success: false, message: 'Lead not found' });
     }
 
-    // Calculate totals from line items
+    // Calculate totals
     let subTotal = 0;
-    const quotationItems = items.map(item => {
+    const itemsToInsert = items.map(item => {
       const totalPrice = item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100);
       subTotal += totalPrice;
       return {
+        id: randomUUID(),
         productId: item.productId,
-        description: item.description,
+        description: item.description || null,
         quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        discount: item.discount || 0,
-        taxRate: item.taxRate || 18,
-        totalPrice
+        unitPrice: String(item.unitPrice),
+        discount: String(item.discount || 0),
+        taxRate: String(item.taxRate || 18),
+        totalPrice: String(totalPrice)
       };
     });
 
@@ -183,96 +343,100 @@ exports.createQuotation = async (req, res) => {
     let taxAmount = taxableAmount * (gstRate / 100);
     let totalAmount = taxableAmount + taxAmount;
 
-    // For Solar Tunnel Dryer, the price is entered directly in customFields.
-    // Override the DB totals so quotation.totalAmount is always the real value.
     if (templateType === 'SOLAR_TUNNEL_DRYER' && customFields) {
-      // Force mathematical correctness on the backend
       const cfQty = parseFloat(customFields.qty) || 1;
       const cfPrice = parseFloat(customFields.unitPrice) || parseFloat(customFields.totalAmt) || 0;
       const cfTotal = cfQty * cfPrice;
 
-      // Update the customFields object so the DB saves the correct total
       customFields.totalAmt = cfTotal;
       customFields.unitPrice = cfPrice;
 
       if (cfTotal > 0) {
         totalAmount = cfTotal;
-        taxAmount = 0;      // GST shown as "included" in the dryer format
+        taxAmount = 0;
         subTotal = cfTotal;
       }
     }
 
-    // ── Determine quotation number ─────────────────────────────────────────
     let quotationNumber;
-
     if (providedNumber) {
-      // Client provided a number (from reservation or manual entry)
       quotationNumber = providedNumber;
-
-      // If a reservationId was given, consume the reservation
       if (reservationId) {
         try {
-          await prisma.$executeRawUnsafe(
-            'DELETE FROM quotation_reservations WHERE id = ?', reservationId
-          );
-        } catch (_) { /* reservation may have already expired — proceed */ }
+          await db.delete(schema.quotationReservations).where(eq(schema.quotationReservations.id, reservationId));
+        } catch (_) {}
       }
-
     } else {
-      // No reservation — generate one fresh (handles legacy callers)
       quotationNumber = await generateQuotationNumber(templateType);
     }
 
     const now = new Date();
+    const quotationId = randomUUID();
 
-    const quotation = await prisma.quotation.create({
-      data: {
-        quotationNumber,
-        leadId,
-        customerId: lead.customerId,
-        createdById: req.user.id,
-        subTotal,
-        discountAmount: discountAmt,
-        discountPercent: discountPercent || 0,
-        taxAmount,
-        totalAmount,
-        quotationDate: now,
-        validUntil: validUntil ? new Date(validUntil) : null,
-        paymentTerms,
-        deliveryTerms,
-        notes,
-        termsConditions,
-        templateType,
-        customFields: customFields ? JSON.parse(JSON.stringify(customFields)) : null,
-        items: { create: quotationItems }
-      },
-      include: {
-        items: { include: { product: true } },
-        customer: true,
-        lead: true
+    const quotationData = {
+      id: quotationId,
+      quotationNumber,
+      leadId,
+      customerId: lead.customerId,
+      createdById: req.user.id,
+      subTotal: String(subTotal),
+      discountAmount: String(discountAmt),
+      discountPercent: String(discountPercent || 0),
+      taxAmount: String(taxAmount),
+      totalAmount: String(totalAmount),
+      quotationDate: now,
+      validUntil: validUntil ? new Date(validUntil) : null,
+      paymentTerms: paymentTerms || null,
+      deliveryTerms: deliveryTerms || null,
+      notes: notes || null,
+      termsConditions: termsConditions || null,
+      templateType,
+      customFields: customFields != null ? (typeof customFields === 'string' ? JSON.parse(customFields) : customFields) : undefined,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const finalQuotation = await db.transaction(async (tx) => {
+      await tx.insert(schema.quotations).values(quotationData);
+
+      const itemsWithQuoteId = itemsToInsert.map(i => ({
+        ...i,
+        quotationId
+      }));
+      if (itemsWithQuoteId.length > 0) {
+        await tx.insert(schema.quotationItems).values(itemsWithQuoteId);
       }
-    });
 
-    // Set versioning columns via raw SQL (not yet in stale Prisma client)
-    await prisma.$executeRawUnsafe(
-      `UPDATE quotations SET versionLabel = 'A', isLatest = 1, originalDate = ? WHERE id = ?`,
-      now, quotation.id
-    );
+      await tx.update(schema.quotations)
+        .set({
+          versionLabel: 'A',
+          isLatest: true,
+          originalDate: now
+        })
+        .where(eq(schema.quotations.id, quotationId));
 
-    await prisma.lead.update({
-      where: { id: leadId },
-      data: { status: 'QUOTATION_SENT' }
-    });
+      await tx.update(schema.leads)
+        .set({ status: 'QUOTATION_SENT', updatedAt: now })
+        .where(eq(schema.leads.id, leadId));
 
-
-    await prisma.leadTimeline.create({
-      data: {
+      await tx.insert(schema.leadTimeline).values({
+        id: randomUUID(),
         leadId,
         action: 'Quotation Created',
-        description: `Quotation ${quotationNumber} [${templateType}] created â€” â‚¹${totalAmount.toLocaleString()}`,
-        performedBy: req.user.id
-      }
+        description: `Quotation ${quotationNumber} [${templateType}] created — ₹${totalAmount.toLocaleString()}`,
+        performedBy: req.user.id,
+        createdAt: now
+      });
+
+      return {
+        ...quotationData,
+        items: itemsWithQuoteId
+      };
     });
+
+    const customerObj = await db.select().from(schema.customers).where(eq(schema.customers.id, lead.customerId)).limit(1).then(r => r[0]);
+    finalQuotation.customer = customerObj;
+    finalQuotation.lead = lead;
 
     const ioRefresh = req.app.get('io');
     if (ioRefresh) {
@@ -280,20 +444,13 @@ exports.createQuotation = async (req, res) => {
       ioRefresh.emit('REFRESH_DATA', { module: 'DASHBOARD' });
     }
 
-    // Fire-and-forget: update quotationsSent count for this employee's active targets
     triggerRefreshForEmployee(req.user.id, ioRefresh);
 
-    res.status(201).json({ success: true, data: quotation });
+    res.status(201).json({ success: true, data: finalQuotation });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// TEMPLATE FACTORY FUNCTIONS
-// To add a new product format: add a new function below and
-// add a new case to the switch in generatePDF().
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function buildStandardHTML(quotation) {
   const logoSrc = getLogoBase64();
@@ -309,14 +466,14 @@ function buildStandardHTML(quotation) {
       <tr>
         <td style="text-align:center;border:1px solid #999;padding:6px 4px;">${i + 1}</td>
         <td style="border:1px solid #999;padding:6px 4px;">
-          <strong>${item.product.name}</strong>
-          ${(item.description || item.product.description) ? `<br/><small style="color:#555">${item.description || item.product.description}</small>` : ''}
+          <strong>${item.product?.name || 'Product'}</strong>
+          ${(item.description || item.product?.description) ? `<br/><small style="color:#555">${item.description || item.product.description}</small>` : ''}
         </td>
         <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${hsn}</td>
         <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${qty}</td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">â‚¹${rate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${rate.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
         <td style="border:1px solid #999;padding:6px 4px;text-align:center;">${uom}</td>
-        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">â‚¹${itemTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+        <td style="border:1px solid #999;padding:6px 4px;text-align:right;">₹${itemTaxable.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
       </tr>`;
   }).join('');
 
@@ -370,13 +527,13 @@ function buildStandardHTML(quotation) {
         <img src="${logoSrc}" style="width:70px;height:auto;object-fit:contain;">
         <div style="line-height:1.5;">
           <div class="name">KVB Green Energies</div>
-          <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad â€“ 580011, Karnataka, India</p>
+          <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad – 580011, Karnataka, India</p>
           <p>Phone: +91 95455 29950, +91 74118 93555</p>
           <p style="font-weight:bold;">GSTIN: 29AAXFK4926A1Z0</p>
         </div>
       </div>` : `
       <div class="name">KVB Green Energies</div>
-      <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad â€“ 580011, Karnataka, India</p>
+      <p>R16, KSSIDC, 3rd Cross, Belur Industrial Estate,<br>Dharwad – 580011, Karnataka, India</p>
       <p>Phone: +91 95455 29950, +91 74118 93555</p>
       <p style="font-weight:bold;">GSTIN: 29AAXFK4926A1Z0</p>`}
     </div>
@@ -386,19 +543,19 @@ function buildStandardHTML(quotation) {
         <div class="meta-cell"><span class="meta-label">Dated</span><span class="meta-value">${new Date(quotation.quotationDate).toLocaleDateString('en-IN')}</span></div>
       </div>
       <div class="meta-row">
-        <div class="meta-cell"><span class="meta-label">Valid Until</span><span class="meta-value">${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString('en-IN') : 'â€”'}</span></div>
-        <div class="meta-cell"><span class="meta-label">Lead Reference</span><span class="meta-value">${quotation.lead.leadNumber}</span></div>
+        <div class="meta-cell"><span class="meta-label">Valid Until</span><span class="meta-value">${quotation.validUntil ? new Date(quotation.validUntil).toLocaleDateString('en-IN') : '—'}</span></div>
+        <div class="meta-cell"><span class="meta-label">Lead Reference</span><span class="meta-value">${quotation.lead?.leadNumber || ''}</span></div>
       </div>
     </div>
   </div>
   <div class="buyer-terms-grid">
     <div class="buyer-block">
       <div class="label">Customer (Bill to)</div>
-      <p><strong>${quotation.customer.contactName}</strong></p>
-      ${quotation.customer.companyName ? `<p>${quotation.customer.companyName}</p>` : ''}
-      ${quotation.customer.address ? `<p>${quotation.customer.address}</p>` : ''}
-      <p>Ph: ${quotation.customer.phone}</p>
-      ${quotation.customer.email ? `<p>Email: ${quotation.customer.email}</p>` : ''}
+      <p><strong>${quotation.customer?.contactName || ''}</strong></p>
+      ${quotation.customer?.companyName ? `<p>${quotation.customer.companyName}</p>` : ''}
+      ${quotation.customer?.address ? `<p>${quotation.customer.address}</p>` : ''}
+      <p>Ph: ${quotation.customer?.phone || ''}</p>
+      ${quotation.customer?.email ? `<p>Email: ${quotation.customer.email}</p>` : ''}
     </div>
     <div class="terms-block">
       <div class="terms-label">Payment &amp; Delivery Terms</div>
@@ -422,7 +579,7 @@ function buildStandardHTML(quotation) {
       ${itemsRows}
       <tr class="total-row">
         <td></td><td><strong>Total</strong></td><td></td><td></td><td></td><td></td>
-        <td style="text-align:right;"><strong>â‚¹${Number(quotation.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
+        <td style="text-align:right;"><strong>₹${Number(quotation.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong></td>
       </tr>
     </tbody>
   </table>
@@ -450,7 +607,7 @@ function buildStandardHTML(quotation) {
     <div class="sig-cell">Accepted By (Name &amp; Signature)</div>
     <div class="sig-cell">
       <p>for <strong>KVB Green Energies</strong></p><br/><br/><br/>
-      <p><strong>${quotation.createdBy.firstName} ${quotation.createdBy.lastName}</strong></p>
+      <p><strong>${quotation.createdBy?.firstName || ''} ${quotation.createdBy?.lastName || ''}</strong></p>
       <p>Authorised Signatory</p>
     </div>
   </div>
@@ -458,16 +615,9 @@ function buildStandardHTML(quotation) {
 </body></html>`;
 }
 
-/**
- * Solar Tunnel Dryer quotation PDF.
- * Exactly matches "Dryer format for CRM.docx" â€” same approach as buildInvoiceHTML.
- * Images extracted from the docx are embedded as base64.
- * Editable (yellow-highlighted) fields come from quotation.customFields.
- */
 function buildSolarTunnelDryerHTML(quotation) {
   const cf = quotation.customFields || {};
 
-  // â”€â”€ Load reference images from docx as base64 (Puppeteer can't fetch file:// paths) â”€â”€
   const getDryerImg = (filename) => {
     const p = path.join(__dirname, '../assets/dryer', filename);
     if (!fs.existsSync(p)) return null;
@@ -475,14 +625,12 @@ function buildSolarTunnelDryerHTML(quotation) {
     const ext = path.extname(filename).slice(1).replace('jpg', 'jpeg');
     return `data:image/${ext};base64,${data.toString('base64')}`;
   };
-  const img1 = getDryerImg('image1.jpg');   // Moringa leaf drying
-  const img2 = getDryerImg('image2.jpeg');  // Coffee beans drying
+  const img1 = getDryerImg('image1.jpg');
+  const img2 = getDryerImg('image2.jpeg');
 
-  // Full Page Stationery Watermark (Header + Fade + Footer)
   const letterheadGraphic = getDryerImg('new_img1.png');
 
-  // â”€â”€ Editable fields (yellow-highlighted in docx) â”€â”€
-  const toName = cf.toName || quotation.customer.contactName;
+  const toName = cf.toName || quotation.customer?.contactName || '';
   const qtnDate = cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const subjectLine = cf.subjectLine || 'Solar Tunnel Dryer for 20w x 54L = 1080 Sq ft';
   const productType = cf.productType || 'Rectangular type with top parabolic Shape';
@@ -491,22 +639,18 @@ function buildSolarTunnelDryerHTML(quotation) {
   const structureDoor = cf.structureDoor || 'GP Square Pipe Frame 25x25mm';
   const purlin = cf.purlin || 'GP Square Pipe 40mm x 40mm';
   const arch = cf.arch || 'GP Square pipe 40x40mm';
-  const traySize = cf.traySize || 'Tray size 2ftx3ft \u2013 Customer Scope';
+  const traySize = cf.traySize || 'Tray size 2ftx3ft – Customer Scope';
   const itemDesc = cf.itemDesc || 'Supply and installation of Polycarbonate sheet covered Solar Tunnel Dryer 1080 Sq ft.';
   const qty = cf.qty || '01';
   const units = cf.units || 'Set';
-  // totalAmt for the table â€” always use quotation.totalAmount (guaranteed correct by createQuotation)
   const unitPrice = Number(cf.unitPrice) || Number(quotation.totalAmount);
   const totalAmt = Number(quotation.totalAmount) || Number(cf.totalAmt) || Number(cf.unitPrice) || 0;
   const paymentTerms = cf.paymentTerms || '70% Advance along with PO 30% against Performa invoice after inspection at factory prior to despatch';
   const packingTerms = cf.packingTerms != null ? cf.packingTerms : '3% extra, (Bubble sheet / corrugated sheet)';
   const freightTerms = cf.freightTerms != null ? cf.freightTerms : 'To your account';
   const gstRate = cf.gstRate != null ? cf.gstRate : 18;
-  const quotRef = cf.quotRef || quotation.quotationNumber;
 
   const fmt = (v) => Number(v).toLocaleString('en-IN', { minimumFractionDigits: 0 });
-
-  // Amount in words â€” derives from totalAmt (same variable as Grand Total cell â€” always in sync)
   const amountWords = numberToWords(totalAmt);
 
   return `<!DOCTYPE html>
@@ -525,7 +669,6 @@ function buildSolarTunnelDryerHTML(quotation) {
     color: #000; 
   }
 
-  /* â”€â”€ FULL PAGE STATIONERY BACKGROUND â”€â”€ */
   .letterhead-bg {
     position: fixed;
     top: 0;
@@ -536,37 +679,30 @@ function buildSolarTunnelDryerHTML(quotation) {
     object-fit: cover;
   }
 
-  /* â”€â”€ Page Layout â”€â”€ */
   .layout-table { width: 100%; border-collapse: collapse; border: none; }
   .layout-table > thead > tr > td { height: 155px; border: none; padding: 0; }
   .layout-table > tfoot > tr > td { height: 90px;  border: none; padding: 0; }
   .content-cell { padding: 20px 50px 0 50px; vertical-align: top; }
 
-  /* â”€â”€ To/Date line â”€â”€ */
   .to-date { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11pt; }
   .to-line { font-size: 11pt; }
   .date-line { font-size: 11pt; white-space: nowrap; }
 
-  /* â”€â”€ Subject â”€â”€ */
   .sub-line { font-weight: bold; font-size: 11pt; margin: 8px 0 16px 0; }
 
-  /* â”€â”€ Body paragraphs â”€â”€ */
   .para { font-size: 11pt; margin: 6px 0; line-height: 1.55; text-align: justify; }
   .ol-sections { margin: 6px 0 10px 40px; font-size: 11pt; line-height: 1.6; }
   .ol-sections li { font-style: italic; font-weight: bold; }
   .sign-off { margin-top: 15px; font-size: 11pt; line-height: 1.6; }
 
-  /* â”€â”€ Section headings (numbered) â”€â”€ */
   .sec-head { font-weight: bold; font-size: 11pt; margin: 14px 0 6px 0; }
 
-  /* â”€â”€ Technical spec table â”€â”€ */
   .spec-wrap { margin-bottom: 15px; margin-top: 15px; }
   .spec-title { font-weight: bold; font-size: 11pt; text-align: center; border: 1px solid #000; border-bottom: none; padding: 5px; background: transparent; }
   .spec-table { width: 100%; border-collapse: collapse; }
   .spec-table td { border: 1px solid #000; padding: 4px 8px; font-size: 10.5pt; vertical-align: top; }
   .spec-table td:first-child { width: 35%; font-weight: normal; }
 
-  /* â”€â”€ Financial offer table â”€â”€ */
   .fin-table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
   .fin-table th { border: 1px solid #000; padding: 5px 8px; font-size: 10.5pt; font-style: italic; font-weight: bold; text-align: center; background: transparent; }
   .fin-table td { border: 1px solid #000; padding: 5px 8px; font-size: 10.5pt; vertical-align: top; }
@@ -574,43 +710,36 @@ function buildSolarTunnelDryerHTML(quotation) {
   .fin-table .right { text-align: right; }
   .fin-table .total-row td { font-weight: bold; font-style: italic; }
 
-  /* â”€â”€ Amount in words â”€â”€ */
   .amt-words { font-weight: bold; font-size: 11pt; margin: 6px 0 14px 0; }
 
-  /* â”€â”€ Terms sub-headings â”€â”€ */
   .terms-h { font-weight: bold; font-size: 12pt; color: #1F497D; margin: 16px 0 6px 0; }
   .terms-ul { margin: 0 0 6px 26px; font-size: 11pt; list-style: disc; }
   .terms-ul li { margin: 3px 0; line-height: 1.55; }
 
-  /* â”€â”€ Bank details â”€â”€ */
   .bank-label { font-style: italic; font-weight: bold; font-size: 12pt; color: #1F497D; margin: 12px 0 4px 0; }
   .bank-table { border-collapse: collapse; font-size: 11pt; font-style: italic; }
   .bank-table td { padding: 2px 8px 2px 0; vertical-align: top; }
 
-  /* â”€â”€ Reference photos â”€â”€ */
   .ref-title { font-weight: bold; font-size: 12pt; margin: 14px 0 10px 0; }
   .ref-img { max-width: 480px; width: 100%; height: auto; margin: 6px auto; display: block; }
   .page-break { page-break-before: always; }
   
-  /* â”€â”€ Social Media â”€â”€ */
   .social-block { font-size: 10pt; font-weight: bold; line-height: 1.6; margin-top: 20px; }
   .social-block a { color: blue; text-decoration: none; word-break: break-all; }
 </style>
 </head>
 <body>
 
-  <!-- â•â• STATIONERY BACKGROUND (REPEATS EVERY PAGE) â•â• -->
   ${letterheadGraphic ? `<img src="${letterheadGraphic}" class="letterhead-bg" alt="" />` : ''}
 
   <table class="layout-table">
     <thead>
-      <tr><td></td></tr> <!-- Pushes content down on every page -->
+      <tr><td></td></tr>
     </thead>
     <tbody>
       <tr>
         <td class="content-cell">
 
-          <!-- â•â• TO / DATE â•â• -->
           <div class="to-date">
             <div class="to-line">
               To,<br/>
@@ -619,10 +748,8 @@ function buildSolarTunnelDryerHTML(quotation) {
             <div class="date-line">Date :${qtnDate}</div>
           </div>
 
-          <!-- â•â• SUBJECT â•â• -->
           <div class="sub-line">Sub: ${subjectLine}</div>
 
-          <!-- â•â• INTRO LETTER â•â• -->
           <p class="para">We thank you for the valuable enquiry. We have great pleasure in proposing our best &amp; most competitive offer, as enumerated below for your kind perusal.</p>
           <p class="para">For your easy evaluation we have segregated the proposal as below:</p>
           <div style="margin: 6px 0 12px 20px;">
@@ -638,11 +765,8 @@ function buildSolarTunnelDryerHTML(quotation) {
             KVB Green Energies &ndash; Dharwad Karnataka. 9545529950.
           </div>
 
-          <!-- End of Page 1 Document Flow -->
           <div class="page-break"></div>
 
-          <!-- â•â• PAGE 2: TECH SPECS TABLE & FINANCIAL OFFER â•â• -->
-          <!-- â•â• SECTION 1: TECHNICAL SPECIFICATIONS (Heading on Page 2) â•â• -->
           <div style="font-weight:bold; font-size:11pt; margin-bottom: 20px;">1. Technical Specifications</div>
           
           <div class="spec-wrap">
@@ -702,7 +826,6 @@ function buildSolarTunnelDryerHTML(quotation) {
 
           <div class="page-break"></div>
 
-          <!-- â•â• PAGE 3: TERMS & CONDITIONS â•â• -->
           <div style="font-weight:bold; font-size:11pt; margin-bottom:15px; margin-left:20px;">
             3. Term &amp; condition:
           </div>
@@ -739,7 +862,6 @@ function buildSolarTunnelDryerHTML(quotation) {
           <div class="terms-h" style="margin-bottom:4px;">GST Details:</div>
           <div style="font-size:11.5pt; font-weight:bold; font-style:italic; color:#1F497D; margin-bottom:20px;">29AAXFK4926A1Z0 (KVB GREEN ENERGIES)</div>
 
-          <!-- â•â• BANK DETAILS â•â• -->
           <table style="width: 100%; border-collapse: collapse;">
             <tr>
               <td style="width: 30%; vertical-align: top;">
@@ -760,7 +882,6 @@ function buildSolarTunnelDryerHTML(quotation) {
 
           <div class="page-break"></div>
 
-          <!-- â•â• PAGE 4: REFERENCE PHOTOS â•â• -->
           <div class="ref-title">Reference Photos</div>
           
           <div style="margin-bottom:5px;">
@@ -773,7 +894,6 @@ function buildSolarTunnelDryerHTML(quotation) {
           </div>
           ${img2 ? `<img src="${img2}" class="ref-img" alt="Coffee Beans Drying"/>` : ''}
 
-          <!-- â•â• SOCIAL MEDIA â•â• -->
           <div class="social-block">
             <div style="margin-bottom:4px;">For More details - Follow us on social media</div>
             <div style="margin-bottom:4px;">Instagram - <a href="https://www.instagram.com/kvb.digital/?igsh=MTRseDExdnN0MGUycQ%3D%3D#">https://www.instagram.com/kvb.digital/?igsh=MTRseDExdnN0MGUycQ%3D%3D#</a></div>
@@ -793,38 +913,84 @@ function buildSolarTunnelDryerHTML(quotation) {
 </html>`;
 }
 
-
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-// Generate PDF â€” Template Factory dispatch
-// Add new product formats here by adding a new case + function.
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Generate PDF
 exports.generatePDF = async (req, res) => {
   try {
     const { id } = req.params;
-    const quotation = await prisma.quotation.findUnique({
-      where: { id },
-      include: {
-        items: { include: { product: true } },
-        customer: true,
-        lead: true,
-        createdBy: { select: { firstName: true, lastName: true } }
-      }
-    });
-    if (!quotation) {
+    
+    // Fetch quotation details
+    const quotationsList = await db.select({
+      id: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber,
+      templateType: schema.quotations.templateType,
+      quotationDate: schema.quotations.quotationDate,
+      validUntil: schema.quotations.validUntil,
+      paymentTerms: schema.quotations.paymentTerms,
+      deliveryTerms: schema.quotations.deliveryTerms,
+      totalAmount: schema.quotations.totalAmount,
+      termsConditions: schema.quotations.termsConditions,
+      customFields: schema.quotations.customFields,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      customerAddress: schema.customers.address,
+      customerPhone: schema.customers.phone,
+      customerEmail: schema.customers.email,
+      leadLeadNumber: schema.leads.leadNumber,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName
+    })
+    .from(schema.quotations)
+    .leftJoin(schema.customers, eq(schema.quotations.customerId, schema.customers.id))
+    .leftJoin(schema.leads, eq(schema.quotations.leadId, schema.leads.id))
+    .leftJoin(schema.users, eq(schema.quotations.createdById, schema.users.id))
+    .where(eq(schema.quotations.id, id))
+    .limit(1);
+
+    if (quotationsList.length === 0) {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
+    const rawPdf = quotationsList[0];
+    const quotation = {
+      id: rawPdf.id, quotationNumber: rawPdf.quotationNumber, templateType: rawPdf.templateType,
+      quotationDate: rawPdf.quotationDate, validUntil: rawPdf.validUntil, paymentTerms: rawPdf.paymentTerms,
+      deliveryTerms: rawPdf.deliveryTerms, totalAmount: rawPdf.totalAmount, termsConditions: rawPdf.termsConditions,
+      customFields: rawPdf.customFields,
+      customer: rawPdf.customerContactName ? { contactName: rawPdf.customerContactName, companyName: rawPdf.customerCompanyName, address: rawPdf.customerAddress, phone: rawPdf.customerPhone, email: rawPdf.customerEmail } : null,
+      lead: rawPdf.leadLeadNumber ? { leadNumber: rawPdf.leadLeadNumber } : null,
+      createdBy: rawPdf.createdByFirstName ? { firstName: rawPdf.createdByFirstName, lastName: rawPdf.createdByLastName } : null
+    };
+
+    // Fetch items
+    const itemsRaw2 = await db.select({
+      id: schema.quotationItems.id,
+      quotationId: schema.quotationItems.quotationId,
+      productId: schema.quotationItems.productId,
+      description: schema.quotationItems.description,
+      quantity: schema.quotationItems.quantity,
+      unitPrice: schema.quotationItems.unitPrice,
+      discount: schema.quotationItems.discount,
+      taxRate: schema.quotationItems.taxRate,
+      totalPrice: schema.quotationItems.totalPrice,
+      productName: schema.products.name,
+      productHsnCode: schema.products.hsnCode,
+      productUnitOfMeasure: schema.products.unitOfMeasure,
+      productDescription: schema.products.description
+    })
+    .from(schema.quotationItems)
+    .leftJoin(schema.products, eq(schema.quotationItems.productId, schema.products.id))
+    .where(eq(schema.quotationItems.quotationId, id));
+
+    quotation.items = itemsRaw2.map(i => ({
+      id: i.id, quotationId: i.quotationId, productId: i.productId, description: i.description,
+      quantity: i.quantity, unitPrice: i.unitPrice, discount: i.discount, taxRate: i.taxRate, totalPrice: i.totalPrice,
+      product: i.productName ? { name: i.productName, hsnCode: i.productHsnCode, unitOfMeasure: i.productUnitOfMeasure, description: i.productDescription } : null
+    }));
 
     let html;
     switch (quotation.templateType) {
       case 'SOLAR_TUNNEL_DRYER':
         html = buildSolarTunnelDryerHTML(quotation);
         break;
-      // â”€â”€ Future templates go here â”€â”€
-      // case 'SOLAR_WATER_HEATER':
-      //   html = buildSolarWaterHeaterHTML(quotation);
-      //   break;
       case 'STANDARD':
       default:
         html = buildStandardHTML(quotation);
@@ -852,134 +1018,223 @@ exports.generatePDF = async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.download(pdfPath, `Quotation-${quotation.quotationNumber}.pdf`, () => {
-      fs.unlink(pdfPath, () => { }); // clean up after download
+      fs.unlink(pdfPath, () => { });
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Convert quotation to sale â€” UNCHANGED
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Convert quotation to sale
 exports.convertToSale = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const quotation = await prisma.quotation.findUnique({
-      where: { id },
-      include: {
-        items: { include: { product: true } },
-        lead: true,
-        customer: true,
-      }
-    });
+    const quotationsList = await db.select({
+      id: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber,
+      customerId: schema.quotations.customerId,
+      leadId: schema.quotations.leadId,
+      subTotal: schema.quotations.subTotal,
+      discountAmount: schema.quotations.discountAmount,
+      taxAmount: schema.quotations.taxAmount,
+      totalAmount: schema.quotations.totalAmount,
+      notes: schema.quotations.notes,
+      status: schema.quotations.status,
+      saleId: schema.quotations.saleId
+    })
+    .from(schema.quotations)
+    .where(eq(schema.quotations.id, id))
+    .limit(1);
 
+    const quotation = quotationsList[0];
     if (!quotation) {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
 
     if (quotation.status === 'CONVERTED_TO_SALE') {
-      const existing = await prisma.quotation.findUnique({
-        where: { id },
-        select: { saleId: true }
-      });
       return res.status(400).json({
         success: false,
         message: 'Already converted to sale',
-        saleId: existing?.saleId
+        saleId: quotation.saleId
       });
     }
 
-    let sale = await prisma.sale.findUnique({
-      where: { quotationId: quotation.id }
-    });
+    // Fetch items
+    const items = await db.select().from(schema.quotationItems).where(eq(schema.quotationItems.quotationId, id));
 
-    if (!sale) {
-      const saleCount = await prisma.sale.count();
+    const finalSale = await db.transaction(async (tx) => {
+      const saleCountRes = await tx.select({ count: sql`count(*)` }).from(schema.sales);
+      const saleCount = Number(saleCountRes[0]?.count || 0);
       const saleNumber = `INV-${String(saleCount + 1).padStart(5, '0')}`;
+      const saleId = randomUUID();
 
-      const saleItems = quotation.items.map(item => ({
+      await tx.insert(schema.sales).values({
+        id: saleId,
+        saleNumber,
+        customerId: quotation.customerId,
+        quotationId: quotation.id,
+        createdById: req.user.id,
+        subTotal: String(quotation.subTotal),
+        discountAmount: String(quotation.discountAmount),
+        taxAmount: String(quotation.taxAmount),
+        totalAmount: String(quotation.totalAmount),
+        balanceAmount: String(quotation.totalAmount),
+        notes: quotation.notes || null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      const saleItemsToInsert = items.map(item => ({
+        id: randomUUID(),
+        saleId,
         productId: item.productId,
         description: item.description || null,
-        quantity: Number(item.quantity),
-        unitPrice: Number(item.unitPrice),
-        discount: Number(item.discount) || 0,
-        taxRate: Number(item.taxRate) || 18,
-        totalPrice: Number(item.totalPrice),
+        quantity: item.quantity,
+        unitPrice: String(item.unitPrice),
+        discount: String(item.discount || 0),
+        taxRate: String(item.taxRate || 18),
+        totalPrice: String(item.totalPrice)
       }));
 
-      sale = await prisma.sale.create({
-        data: {
-          saleNumber,
-          customerId: quotation.customerId,
-          quotationId: quotation.id,
-          createdById: req.user.id,
-          subTotal: Number(quotation.subTotal),
-          discountAmount: Number(quotation.discountAmount),
-          taxAmount: Number(quotation.taxAmount),
-          totalAmount: Number(quotation.totalAmount),
-          balanceAmount: Number(quotation.totalAmount),
-          notes: quotation.notes || null,
-          items: { create: saleItems },
-        },
-        include: {
-          customer: true,
-          createdBy: { select: { id: true, firstName: true, lastName: true } },
-          items: { include: { product: true } },
-          payments: true,
-        }
-      });
-    }
+      await tx.insert(schema.saleItems).values(saleItemsToInsert);
 
-    await prisma.quotation.update({
-      where: { id },
-      data: {
-        status: 'CONVERTED_TO_SALE',
-        sale: { connect: { id: sale.id } }
-      }
-    });
+      await tx.update(schema.quotations)
+        .set({
+          status: 'CONVERTED_TO_SALE',
+          saleId: saleId,
+          updatedAt: new Date()
+        })
+        .where(eq(schema.quotations.id, id));
 
-    await prisma.lead.update({
-      where: { id: quotation.leadId },
-      data: { status: 'ORDER_CONFIRMED' }
-    });
+      await tx.update(schema.leads)
+        .set({ status: 'ORDER_CONFIRMED', updatedAt: new Date() })
+        .where(eq(schema.leads.id, quotation.leadId));
 
-    await prisma.leadTimeline.create({
-      data: {
+      await tx.insert(schema.leadTimeline).values({
+        id: randomUUID(),
         leadId: quotation.leadId,
         action: 'Quotation Converted to Sale',
-        description: `Quotation ${quotation.quotationNumber} converted â†’ Sale ${sale.saleNumber}`,
+        description: `Quotation ${quotation.quotationNumber} converted → Sale ${saleNumber}`,
         performedBy: req.user.id,
-      }
+        createdAt: new Date()
+      });
+
+      return { id: saleId, saleNumber };
     });
 
-    res.json({ success: true, data: sale, saleId: sale.id });
+    res.json({ success: true, data: finalSale, saleId: finalSale.id });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Generate DOCX
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 exports.generateDOCX = async (req, res) => {
   try {
     const { id } = req.params;
-    const quotation = await prisma.quotation.findUnique({
-      where: { id },
-      include: {
-        items: { include: { product: true } },
-        customer: true,
-        lead: true,
-        createdBy: { select: { firstName: true, lastName: true } }
-      }
-    });
-    if (!quotation) {
+
+    const quotationsRawList = await db.select({
+      id: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber,
+      templateType: schema.quotations.templateType,
+      quotationDate: schema.quotations.quotationDate,
+      validUntil: schema.quotations.validUntil,
+      paymentTerms: schema.quotations.paymentTerms,
+      deliveryTerms: schema.quotations.deliveryTerms,
+      totalAmount: schema.quotations.totalAmount,
+      notes: schema.quotations.notes,
+      termsConditions: schema.quotations.termsConditions,
+      customFields: schema.quotations.customFields,
+      customerId: schema.quotations.customerId,
+      leadId: schema.quotations.leadId,
+      createdByFirstName: schema.users.firstName,
+      createdByLastName: schema.users.lastName,
+      customerContactName: schema.customers.contactName,
+      customerCompanyName: schema.customers.companyName,
+      customerCity: schema.customers.city,
+      customerAddress: schema.customers.address,
+      customerPhone: schema.customers.phone,
+      customerEmail: schema.customers.email
+    })
+    .from(schema.quotations)
+    .leftJoin(schema.customers, eq(schema.quotations.customerId, schema.customers.id))
+    .leftJoin(schema.users, eq(schema.quotations.createdById, schema.users.id))
+    .where(eq(schema.quotations.id, id))
+    .limit(1);
+
+    if (quotationsRawList.length === 0) {
       return res.status(404).json({ success: false, message: 'Quotation not found' });
     }
 
-    // â”€â”€ Solar Tunnel Dryer: use native Word template for 100% layout replica â”€â”€
+    const rawQuot = quotationsRawList[0];
+    const quotation = {
+      id: rawQuot.id,
+      quotationNumber: rawQuot.quotationNumber,
+      templateType: rawQuot.templateType,
+      quotationDate: rawQuot.quotationDate,
+      validUntil: rawQuot.validUntil,
+      paymentTerms: rawQuot.paymentTerms,
+      deliveryTerms: rawQuot.deliveryTerms,
+      totalAmount: rawQuot.totalAmount,
+      notes: rawQuot.notes,
+      termsConditions: rawQuot.termsConditions,
+      customFields: rawQuot.customFields,
+      customerId: rawQuot.customerId,
+      leadId: rawQuot.leadId,
+      createdBy: rawQuot.createdByFirstName ? {
+        firstName: rawQuot.createdByFirstName,
+        lastName: rawQuot.createdByLastName
+      } : null,
+      customer: rawQuot.customerContactName ? {
+        contactName: rawQuot.customerContactName,
+        companyName: rawQuot.customerCompanyName,
+        city: rawQuot.customerCity,
+        address: rawQuot.customerAddress,
+        phone: rawQuot.customerPhone,
+        email: rawQuot.customerEmail
+      } : null
+    };
+
+    // Fetch items
+    const itemsRaw = await db.select({
+      id: schema.quotationItems.id,
+      quotationId: schema.quotationItems.quotationId,
+      productId: schema.quotationItems.productId,
+      description: schema.quotationItems.description,
+      quantity: schema.quotationItems.quantity,
+      unitPrice: schema.quotationItems.unitPrice,
+      discount: schema.quotationItems.discount,
+      taxRate: schema.quotationItems.taxRate,
+      totalPrice: schema.quotationItems.totalPrice,
+      productName: schema.products.name,
+      productHsnCode: schema.products.hsnCode,
+      productUnitOfMeasure: schema.products.unitOfMeasure,
+      productDescription: schema.products.description
+    })
+    .from(schema.quotationItems)
+    .leftJoin(schema.products, eq(schema.quotationItems.productId, schema.products.id))
+    .where(eq(schema.quotationItems.quotationId, id));
+
+    quotation.items = itemsRaw.map(i => ({
+      id: i.id,
+      quotationId: i.quotationId,
+      productId: i.productId,
+      description: i.description,
+      quantity: i.quantity,
+      unitPrice: i.unitPrice,
+      discount: i.discount,
+      taxRate: i.taxRate,
+      totalPrice: i.totalPrice,
+      product: i.productName ? {
+        name: i.productName,
+        hsnCode: i.productHsnCode,
+        unitOfMeasure: i.productUnitOfMeasure,
+        description: i.productDescription
+      } : null
+    }));
+
+    // Solar Tunnel Dryer
     if (quotation.templateType === 'SOLAR_TUNNEL_DRYER') {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
@@ -994,10 +1249,9 @@ exports.generateDOCX = async (req, res) => {
       const cf = quotation.customFields || {};
       const rawTotal = Number(quotation.totalAmount) || Number(cf.totalAmt) || Number(cf.unitPrice) || 0;
       const totalAmt = rawTotal.toLocaleString('en-IN');
-
       const totalAmtWords = numberToWords(Number(cf.totalAmt || quotation.totalAmount || 0));
-
       const rawUnitPrice = Number(cf.unitPrice) || Number(quotation.totalAmount) || 0;
+      
       doc.render({
         quotationNumber: quotation.quotationNumber,
         quotRef: quotation.quotationNumber,
@@ -1032,7 +1286,7 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
-    // ——— Solar Parabolic Cooker: use native Word template ———
+    // Solar Parabolic Cooker
     if (quotation.templateType === 'SOLAR_PARABOLIC_COOKER') {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
@@ -1045,8 +1299,6 @@ exports.generateDOCX = async (req, res) => {
       }
 
       const cf = quotation.customFields || {};
-
-      // Build feasibility rows — auto-calc kgOfLpg, amount, totalAmount
       const pricePerCylinder = parseFloat(cf.pricePerCylinder) || 180;
       const kgPerCylinder = parseFloat(cf.kgPerCylinder) || 19.2;
       const monthsPerYear = parseInt(cf.monthsPerYear) || 10;
@@ -1072,10 +1324,7 @@ exports.generateDOCX = async (req, res) => {
         quotationNumber: quotation.quotationNumber,
         quotRef: quotation.quotationNumber,
         refer: quotation.quotationNumber,
-        // Para 9
         paybackPeriod: cf.paybackPeriod || '1 year (10 Months).',
-
-        // Table 1 â€” pricing
         item_desc: cf.item_desc || 'Supply of 4 Sq mtr Solar Parabolic cooker',
         item_qty: cf.item_qty || '1',
         item_price: cf.item_price || '1,25,000/-',
@@ -1085,8 +1334,6 @@ exports.generateDOCX = async (req, res) => {
         packingCharge: cf.packingCharge || 'Extra',
         freightTerms: cf.freightTerms || 'To your account',
         installCharge: cf.installCharge || 'Extra',
-
-        // Table 2 â€” dynamic feasibility loop
         feasibilityRows,
       });
 
@@ -1096,7 +1343,7 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
-    // â”€â”€ Solar Parabolic Trough: use native Word template â”€â”€
+    // Solar Parabolic Trough
     if (quotation.templateType === 'SOLAR_PARABOLIC_TROUGH') {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
@@ -1117,14 +1364,11 @@ exports.generateDOCX = async (req, res) => {
         quotRef: quotation.quotationNumber,
         refer: quotation.quotationNumber,
         qtnDate: cf.qtnDate || new Date(quotation.quotationDate).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
-
         toName: cf.toName || quotation.customer?.contactName || '',
         customerCompanyAndAddress: cf.customerCompanyAndAddress || quotation.customer?.companyName || '',
         customerCity: cf.customerCity || quotation.customer?.city || '',
         subjectLine: cf.subjectLine || '700 kg/hr Solar Parabolic Trough Steam Generation System',
         systemCapacity: cf.systemCapacity || '700',
-
-        // 5 line items
         item1_desc: cf.item1_desc || '',
         item1_amt: cf.item1_amt || '0.00',
         item2_desc: cf.item2_desc || '',
@@ -1135,10 +1379,9 @@ exports.generateDOCX = async (req, res) => {
         item4_amt: cf.item4_amt || '0.00',
         item5_desc: cf.item5_desc || '',
         item5_amt: cf.item5_amt || '0.00',
-
         totalAmt: cf.totalAmt || '0.00',
         amountWords: cf.amountWords || '',
-        deliveryWeeks: cf.deliveryWeeks || '12\u201314',
+        deliveryWeeks: cf.deliveryWeeks || '12–14',
         paymentTerms: cf.paymentTerms || '',
       });
 
@@ -1148,7 +1391,7 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
-    // â”€â”€ Scheffler Dish: use native Word template â”€â”€
+    // Scheffler Dish
     if (quotation.templateType === 'SCHEFFLER_DISH') {
       const PizZip = require('pizzip');
       const Docxtemplater = require('docxtemplater');
@@ -1165,9 +1408,6 @@ exports.generateDOCX = async (req, res) => {
       const showCylinder = fuelType === 'Cylinder' || fuelType === 'Both';
       const showElectricity = fuelType === 'Electricity' || fuelType === 'Both';
 
-      // Pre-process: strip unwanted table rows from raw document.xml BEFORE docxtemplater.
-      // {#tag} conditionals do NOT work inside <w:tc> table-cell scope in docxtemplater,
-      // so we remove the rows directly from the XML string instead.
       const zip = new PizZip(rawContent);
       let docXml = zip.file('word/document.xml').asText();
 
@@ -1183,7 +1423,6 @@ exports.generateDOCX = async (req, res) => {
         '{electricityCostMonthlyProposed}', '{electricityCostAnnuallyProposed}',
       ];
 
-      // Remove every <w:tr>...</w:tr> that contains any of the given tag strings
       const removeRowsContaining = (xml, tags) => {
         let result = xml;
         for (const tag of tags) {
@@ -1210,7 +1449,7 @@ exports.generateDOCX = async (req, res) => {
       const fmt = (val) => Number(val || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
       const totalAmt = parseFloat(cf.totalAmt) || 0;
 
-      const items = (cf.items || []).map((item, idx) => ({
+      const itemsList = (cf.items || []).map((item, idx) => ({
         sno: idx + 1,
         desc: item.desc || '',
         qty: item.qty || '',
@@ -1227,11 +1466,9 @@ exports.generateDOCX = async (req, res) => {
         refer: quotation.quotationNumber,
         dishesMealsStatement: cf.dishesMealsStatement || '',
         subjectLine: cf.subjectLine || '',
-        items,
+        items: itemsList,
         totalAmt: totalAmt.toLocaleString('en-IN', { minimumFractionDigits: 2 }),
         amountWords: cf.amountWords || ('Rupees ' + numberToWords(totalAmt) + ' Only'),
-
-        // Economic Viability â€“ Current
         cylindersPerDay: fmt(cf.cylindersPerDay),
         costPerCylinder: fmt(cf.costPerCylinder),
         cylinderCostPerDay: fmt(cf.cylinderCostPerDay),
@@ -1242,8 +1479,6 @@ exports.generateDOCX = async (req, res) => {
         nonSunnyDaysExpensesCurrent: cf.nonSunnyDaysExpensesCurrent || 'Consider in above calculation',
         setupCostCurrent: '0',
         totalCost1YearCurrent: fmt(cf.totalCost1YearCurrent),
-
-        // Economic Viability â€“ Proposed
         cylindersPerDayProposed: '0',
         costPerCylinderProposed: '0',
         cylinderCostPerDayProposed: '0',
@@ -1255,8 +1490,6 @@ exports.generateDOCX = async (req, res) => {
         setupCost: fmt(totalAmt),
         totalCost1YearProposed: fmt(cf.totalCost1YearProposed),
         roi: cf.roi || '0',
-
-        // Cost Analysis â€“ 10 Years
         annualMaintenanceCostCurrent: '0',
         tenYearMaintenanceCostCurrent: '0',
         totalCost10YearsCurrent: fmt(cf.totalCost10YearsCurrent),
@@ -1264,8 +1497,6 @@ exports.generateDOCX = async (req, res) => {
         tenYearMaintenanceCost: fmt(cf.tenYearMaintenanceCost),
         totalCost10YearsProposed: fmt(cf.totalCost10YearsProposed),
         savings: fmt(cf.savings),
-
-        // Terms
         exWorksTerms: cf.exWorksTerms || 'Prices quoted are Ex works and exclusive of GST. GST will be charged at a rate of 18% on the basic price.',
         packingTerms: cf.packingTerms || 'Packing 3% Extra, Fright and insurance will be in scope.',
         paymentTerms1: cf.paymentTerms1 || '70% advance payment upon receipt of the purchase order.',
@@ -1279,7 +1510,7 @@ exports.generateDOCX = async (req, res) => {
       return res.send(buf);
     }
 
-    // Standard quotation: fall back to html-to-docx
+    // Standard fallback
     const html = buildStandardHTML(quotation);
     const htmlToDocx = require('html-to-docx');
     const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
@@ -1299,30 +1530,56 @@ exports.generateDOCX = async (req, res) => {
   }
 };
 
-
 // GET /api/quotations/product-summary
-// Returns each product with: totalQuotations count, totalQty, totalValue
 exports.getQuotationsByProduct = async (req, res) => {
   try {
-    const where = {};
-    if (req.user.role === 'EMPLOYEE') where.quotation = { createdById: req.user.id };
+    const conditions = [];
+    if (req.user.role === 'EMPLOYEE') {
+      conditions.push(eq(schema.quotations.createdById, req.user.id));
+    }
 
-    const items = await prisma.quotationItem.findMany({
-      where,
-      include: {
-        product: { select: { id: true, name: true, hsnCode: true } },
-        quotation: {
-          select: {
-            id: true,
-            quotationNumber: true,
-            createdAt: true,
-            totalAmount: true,
-            status: true,
-            customer: { select: { contactName: true } }
-          }
-        }
-      }
-    });
+    const itemsRaw = await db.select({
+      id: schema.quotationItems.id,
+      productId: schema.quotationItems.productId,
+      quantity: schema.quotationItems.quantity,
+      totalPrice: schema.quotationItems.totalPrice,
+      productId_: schema.products.id,
+      productName: schema.products.name,
+      productHsnCode: schema.products.hsnCode,
+      quotationId_: schema.quotations.id,
+      quotationNumber: schema.quotations.quotationNumber,
+      quotationCreatedAt: schema.quotations.createdAt,
+      quotationTotalAmount: schema.quotations.totalAmount,
+      quotationStatus: schema.quotations.status,
+      customerContactName: schema.customers.contactName
+    })
+    .from(schema.quotationItems)
+    .leftJoin(schema.products, eq(schema.quotationItems.productId, schema.products.id))
+    .leftJoin(schema.quotations, eq(schema.quotationItems.quotationId, schema.quotations.id))
+    .leftJoin(schema.customers, eq(schema.quotations.customerId, schema.customers.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined);
+
+    const items = itemsRaw.map(i => ({
+      id: i.id,
+      productId: i.productId,
+      quantity: i.quantity,
+      totalPrice: i.totalPrice,
+      product: i.productId_ ? {
+        id: i.productId_,
+        name: i.productName,
+        hsnCode: i.productHsnCode
+      } : null,
+      quotation: i.quotationId_ ? {
+        id: i.quotationId_,
+        quotationNumber: i.quotationNumber,
+        createdAt: i.quotationCreatedAt,
+        totalAmount: i.quotationTotalAmount,
+        status: i.quotationStatus,
+        customer: i.customerContactName ? {
+          contactName: i.customerContactName
+        } : null
+      } : null
+    }));
 
     // Group by product
     const map = new Map();
