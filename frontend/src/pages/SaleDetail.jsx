@@ -54,6 +54,27 @@ function InfoRow({ label, value }) {
   );
 }
 
+const parseNotesAndMeta = (rawNotes) => {
+  if (!rawNotes) return { cleanNotes: '', meta: {} };
+  // Extract the JSON object immediately after __META__ using a regex
+  // (same approach as the backend invoice generator)
+  const metaMatch = rawNotes.match(/__META__(\{.*?\})/s) || rawNotes.match(/__META__(\{[^\n]*\})/);
+  let meta = {};
+  if (metaMatch) {
+    try {
+      meta = JSON.parse(metaMatch[1]);
+    } catch (e) {
+      console.warn('Failed to parse sale metadata:', e);
+    }
+  }
+  // Strip only the __META__{...} token, preserving text before AND after it
+  const cleanNotes = rawNotes
+    .replace(/__META__\{[^\n]*\}/, '')   // remove the token (JSON is always single-line)
+    .replace(/\n{2,}/g, '\n')            // collapse double blank lines
+    .trim();
+  return { cleanNotes, meta };
+};
+
 /* ─── Main Component ─────────────────────────────────── */
 export default function SaleDetail() {
   const { id } = useParams();
@@ -61,6 +82,8 @@ export default function SaleDetail() {
   const { currentSale: sale, isLoading, getSale, recordPayment, updateSale } = useSaleStore();
   const { user } = useAuthStore();
   const isAdmin = user?.role === 'ADMIN';
+
+  const { cleanNotes, meta } = parseNotesAndMeta(sale?.notes);
 
   // Payment modal state
   const [showPayModal, setShowPayModal] = useState(false);
@@ -325,10 +348,23 @@ export default function SaleDetail() {
                       <td className="px-4 py-1.5 text-red-500 text-xs font-medium">−{fmt(sale.discountAmount)}</td>
                     </tr>
                   )}
-                  <tr>
-                    <td colSpan={6} className="px-4 py-1.5 text-right text-xs text-gray-500">CGST + SGST (18%)</td>
-                    <td className="px-4 py-1.5 text-xs text-gray-700">{fmt(sale.taxAmount)}</td>
-                  </tr>
+                  {meta?.taxType === 'IGST' ? (
+                    <tr>
+                      <td colSpan={6} className="px-4 py-1.5 text-right text-xs text-gray-500">IGST ({meta.igstRate ?? 18}%)</td>
+                      <td className="px-4 py-1.5 text-xs text-gray-700">{fmt(sale.taxAmount)}</td>
+                    </tr>
+                  ) : (
+                    <>
+                      <tr>
+                        <td colSpan={6} className="px-4 py-1.5 text-right text-xs text-gray-500">CGST ({meta.cgstRate ?? 9}%)</td>
+                        <td className="px-4 py-1.5 text-xs text-gray-700">{fmt(Number(sale.taxAmount) / 2)}</td>
+                      </tr>
+                      <tr>
+                        <td colSpan={6} className="px-4 py-1.5 text-right text-xs text-gray-500">SGST ({meta.sgstRate ?? 9}%)</td>
+                        <td className="px-4 py-1.5 text-xs text-gray-700">{fmt(Number(sale.taxAmount) / 2)}</td>
+                      </tr>
+                    </>
+                  )}
                   <tr className="border-t border-gray-200">
                     <td colSpan={6} className="px-4 py-3 text-right font-bold text-emerald-700 text-base">Grand Total</td>
                     <td className="px-4 py-3 font-bold text-emerald-700 text-base">{fmt(sale.totalAmount)}</td>
@@ -339,12 +375,12 @@ export default function SaleDetail() {
           </div>
 
           {/* Notes */}
-          {sale.notes && (
+          {cleanNotes && (
             <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
               <h3 className="text-xs font-bold text-amber-700 uppercase tracking-wide mb-2 flex items-center gap-1.5">
                 <FileText size={13} /> Notes / Terms
               </h3>
-              <p className="text-sm text-amber-900 whitespace-pre-line leading-relaxed">{sale.notes}</p>
+              <p className="text-sm text-amber-900 whitespace-pre-line leading-relaxed">{cleanNotes}</p>
             </div>
           )}
         </div>
@@ -382,6 +418,23 @@ export default function SaleDetail() {
               )}
             </div>
           </div>
+
+          {/* Shipping & Delivery Details */}
+          {meta && Object.keys(meta).length > 0 && (meta.deliveryNote || meta.dispatchDocNo || meta.dispatchedThrough || meta.destination || meta.buyersOrderNo || meta.termsOfDelivery) && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3 flex items-center gap-1.5">
+                <Package size={13} /> Shipping & Delivery
+              </h3>
+              <div className="space-y-1">
+                <InfoRow label="Buyer's Order No." value={meta.buyersOrderNo} />
+                <InfoRow label="Delivery Note" value={meta.deliveryNote} />
+                <InfoRow label="Dispatch Doc No." value={meta.dispatchDocNo} />
+                <InfoRow label="Dispatched Through" value={meta.dispatchedThrough} />
+                <InfoRow label="Destination" value={meta.destination} />
+                <InfoRow label="Terms of Delivery" value={meta.termsOfDelivery} />
+              </div>
+            </div>
+          )}
 
           {/* Payment history */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
