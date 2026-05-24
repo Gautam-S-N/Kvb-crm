@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Ultra-sleek, modern scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 100px;
+    transition: background 0.3s;
+  }
+
+  *:hover::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.25) !important;
+  }
+
+  /* Dark mode / Sidebar / Dark containers */
+  .dark-scrollbar::-webkit-scrollbar-thumb,
+  aside::-webkit-scrollbar-thumb,
+  .bg-slate-900::-webkit-scrollbar-thumb,
+  .bg-gray-900::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  aside:hover::-webkit-scrollbar-thumb,
+  .bg-slate-900:hover::-webkit-scrollbar-thumb,
+  .bg-gray-900:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+  }
+
+  aside::-webkit-scrollbar-thumb:hover,
+  .bg-slate-900::-webkit-scrollbar-thumb:hover,
+  .bg-gray-900::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3) !important;
+  }
+
+  /* Firefox support */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.1) transparent;
+  }
+
+  aside, .bg-slate-900, .bg-gray-900 {
+    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+  }
+}

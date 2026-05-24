@@ -1,0 +1,6 @@
+{
+  "signal": "SIGKILL",
+  "delay": 500,
+  "ignore": ["node_modules/*", "uploads/*", "scratch/*"],
+  "ext": "js,mjs,cjs,json"
+}
