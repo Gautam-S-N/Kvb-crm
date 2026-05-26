@@ -38,6 +38,8 @@ const notificationRoutes = require('./routes/notification.routes');
 
 const materialRoutes = require('./routes/material.routes');
 const materialRequestRoutes = require('./routes/materialRequest.routes');
+const materialCatalogRoutes = require('./routes/materialCatalog.routes');
+
 
 
 // Initialize express
@@ -104,7 +106,9 @@ app.use('/uploads/images', express.static('uploads/images'));
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/materials', materialRoutes);
+app.use('/api/material-catalog', materialCatalogRoutes);
 app.use('/api/material-requests', materialRequestRoutes);
+
 
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/sales', saleRoutes);

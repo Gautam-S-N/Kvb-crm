@@ -75,6 +75,9 @@ function App() {
         } else if (module === 'MATERIALS') {
           const { useMaterialStore } = await import('./stores/materialStore');
           useMaterialStore.getState().fetchMaterials();
+        } else if (module === 'MATERIAL_CATALOG') {
+          const { useMaterialCatalogStore } = await import('./stores/materialCatalogStore');
+          useMaterialCatalogStore.getState().fetchMaterials();
         } else if (module === 'TODOS') {
           const { useTodoStore } = await import('./stores/todoStore');
           useTodoStore.getState().fetchTodos();

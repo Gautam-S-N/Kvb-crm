@@ -1,13 +1,13 @@
 import { useState, useRef } from 'react';
-import { useMaterialStore } from '../../stores/materialStore';
+import { useMaterialCatalogStore } from '../../stores/materialCatalogStore';
 import api from '../../services/api';
 import { Plus, Search, Edit2, Trash2, AlertTriangle, X, Info, Save } from 'lucide-react';
 
 const CATS = ['Sq. Tube','Flat Plate','Rec. Tube','Hardware','Round Tube','Round Rod','L Angle','C Channel'];
-const BLANK = { itemName:'', itemCode:'', category:CATS[0], unit:'Nos', balance:0, inQty:0, outQty:0, rate:0, location:'', remarks:'' };
+const BLANK = { itemName:'', itemCode:'', category:CATS[0], unit:'Nos', rate:0, location:'', remarks:'' };
 
 export default function DCCatalogTab() {
-  const { materials, isLoading, fetchMaterials, createMaterial, updateMaterial, deleteMaterial } = useMaterialStore();
+  const { materials, isLoading, fetchMaterials, createMaterial, updateMaterial, deleteMaterial } = useMaterialCatalogStore();
   const [search, setSearch] = useState('');
   const [cat, setCat]       = useState('ALL');
   const [modal, setModal]   = useState(false);
@@ -195,19 +195,7 @@ export default function DCCatalogTab() {
                     className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-green-500 outline-none" placeholder="e.g. Tube 20x20 / MS Seamless / Fasteners"/>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3 pt-2 border-t">
-                {[['In Qty','inQty','blue'],['Out Qty','outQty','orange'],['Stock in Hand','balance','green']].map(([lbl,key,col])=>(
-                  <div key={key} className={`bg-${col}-50 p-3 rounded-xl`}>
-                    <label className={`block text-[10px] font-bold text-${col}-600 uppercase mb-1`}>{lbl}</label>
-                    <input type="number" value={form[key]} onChange={e=>{
-                      const v = Number(e.target.value)||0;
-                      if (key==='inQty')  setForm(p=>({...p,inQty:v,balance:v-(Number(p.outQty)||0)}));
-                      else if (key==='outQty') setForm(p=>({...p,outQty:v,balance:(Number(p.inQty)||0)-v}));
-                      else setForm(p=>({...p,balance:v}));
-                    }} className={`w-full bg-white px-3 py-1.5 rounded-lg border border-${col}-100 outline-none text-sm`}/>
-                  </div>
-                ))}
-              </div>
+
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Size / Dimensions</label>
                 <input value={form.remarks} onChange={e=>setForm(p=>({...p,remarks:e.target.value}))}

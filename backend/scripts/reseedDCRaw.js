@@ -21,12 +21,12 @@ async function run() {
   
   // 1. Delete all existing DC Raw records
   try {
-    const deletedResult = await db.delete(schema.materials)
-      .where(inArray(schema.materials.category, DC_RAW_CATS));
+    const deletedResult = await db.delete(schema.materialCatalog)
+      .where(inArray(schema.materialCatalog.category, DC_RAW_CATS));
     
     console.log(`🗑️  Cleaned existing DC Raw Material records.\n`);
   } catch (err) {
-    console.error('Error deleting materials:', err.message);
+    console.error('Error deleting materialCatalog:', err.message);
   }
 
   // 2. Read Sheet3
@@ -65,15 +65,13 @@ async function run() {
     const typeStr = type  ? String(type).trim()  : '';
     const sizeStr = size  ? String(size).trim()  : '';
 
-    await db.insert(schema.materials).values({
+    await db.insert(schema.materialCatalog).values({
       id: randomUUID(),
       itemName,
       itemCode,
       category:    cat,
       unit:        'Nos',
       rate:        '0.00',
-      balance:     '0.00',
-      minQuantity: '0.00',
       location:    typeStr || null,    // Type  → location
       remarks:     sizeStr || null,    // Size  → remarks
       projectSite: currentSection || null,  // Section heading

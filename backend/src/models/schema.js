@@ -237,6 +237,24 @@ const materials = mysqlTable('materials', {
 });
 
 // ============================================
+// MATERIAL CATALOG FOR CHECKLISTS & REQUESTS
+// ============================================
+const materialCatalog = mysqlTable('material_catalog', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  itemName: varchar('itemName', { length: 255 }).notNull(),
+  itemCode: varchar('itemCode', { length: 255 }),
+  category: varchar('category', { length: 255 }).notNull(),
+  unit: varchar('unit', { length: 255 }).default('Nos').notNull(),
+  rate: decimal('rate', { precision: 15, scale: 2 }).default('0.00').notNull(),
+  remarks: text('remarks'), // Size / Dimensions
+  location: varchar('location', { length: 255 }), // Type / Details
+  projectSite: varchar('projectSite', { length: 255 }), // Section
+  createdAt: timestamp('createdAt').defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt').defaultNow().notNull(),
+});
+
+
+// ============================================
 // SALES PERFORMANCE TARGETS
 // ============================================
 const salesTargets = mysqlTable('sales_targets', {
@@ -580,4 +598,5 @@ module.exports = {
   bulkMessageCampaigns,
   bulkMessageLogs,
   notes,
+  materialCatalog,
 };

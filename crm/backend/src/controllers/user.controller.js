@@ -1,4 +1,4 @@
-const { eq, and, or, like, isNull, inArray, sql, desc } = require('drizzle-orm');
+const { eq, ne, and, or, like, isNull, inArray, sql, desc } = require('drizzle-orm');
 const { db } = require('../utils/drizzle');
 const schema = require('../models/schema');
 const bcrypt = require('bcrypt');
@@ -26,7 +26,7 @@ exports.getUsers = async (req, res) => {
   try {
     const { role, search } = req.query;
     
-    const conditions = [];
+    const conditions = [ne(schema.users.status, 'INACTIVE')];
     if (role) {
       conditions.push(eq(schema.users.role, role));
     }
@@ -500,16 +500,33 @@ exports.deleteUser = async (req, res) => {
 
     const subordinateCountResult = await db.select({ count: sql`count(*)` })
       .from(schema.users)
-      .where(eq(schema.users.managerId, id));
+      .where(
+        and(
+          eq(schema.users.managerId, id),
+          ne(schema.users.status, 'INACTIVE')
+        )
+      );
 
     if (subordinateCountResult[0].count > 0) {
       return res.status(400).json({ 
         success: false, 
-        message: 'User has subordinates. Please reassign them before deleting.' 
+        message: 'User has active subordinates. Please reassign them before deleting.' 
       });
     }
 
-    await db.delete(schema.users).where(eq(schema.users.id, id));
+    try {
+      await db.delete(schema.users).where(eq(schema.users.id, id));
+    } catch (dbErr) {
+      const code = dbErr.code || dbErr.cause?.code;
+      const errno = dbErr.errno || dbErr.cause?.errno;
+      if (code === 'ER_ROW_IS_REFERENCED_2' || errno === 1451) {
+        await db.update(schema.users)
+          .set({ status: 'INACTIVE', managerId: null, updatedAt: new Date() })
+          .where(eq(schema.users.id, id));
+      } else {
+        throw dbErr;
+      }
+    }
 
     res.json({ success: true, message: 'User deleted successfully' });
   } catch (error) {

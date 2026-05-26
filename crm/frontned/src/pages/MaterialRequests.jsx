@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import Layout from '../components/Layout';
 import { useAuthStore } from '../stores/authStore';
 import { useMaterialRequestStore } from '../stores/materialRequestStore';
-import { useMaterialStore } from '../stores/materialStore';
+import { useMaterialCatalogStore } from '../stores/materialCatalogStore';
 import api from '../services/api';
 import DCCatalogTab from '../components/materialRequest/DCCatalogTab';
 import DryerCatalogTab from '../components/materialRequest/DryerCatalogTab';
@@ -19,7 +19,7 @@ const STATUS_COLORS = {
 export default function MaterialRequests() {
   const { user } = useAuthStore();
   const { requests, loading, fetchRequests, createRequest, updateRequest, updateStatus, toggleItemPurchased, deleteRequest } = useMaterialRequestStore();
-  const { materials, fetchMaterials } = useMaterialStore();
+  const { materials, fetchMaterials } = useMaterialCatalogStore();
 
   const canCreate = user?.role === 'ADMIN' || user?.canCreateMaterialRequests === true;
 

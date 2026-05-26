@@ -18,12 +18,12 @@ async function run() {
   
   // 1. Delete all existing Dryer Component records
   try {
-    await db.delete(schema.materials)
-      .where(eq(schema.materials.category, 'Dryer Component'));
+    await db.delete(schema.materialCatalog)
+      .where(eq(schema.materialCatalog.category, 'Dryer Component'));
     
     console.log(`🗑️  Deleted existing Dryer Component records.\n`);
   } catch (err) {
-    console.error('Error deleting materials:', err.message);
+    console.error('Error deleting materialCatalog:', err.message);
   }
 
   // 2. Read Sheet1
@@ -49,15 +49,13 @@ async function run() {
     seq++;
     const itemCode = `DC1-${String(seq).padStart(3, '0')}`;
 
-    await db.insert(schema.materials).values({
+    await db.insert(schema.materialCatalog).values({
       id:          randomUUID(),
       itemName,
       itemCode,
       category:    'Dryer Component',
       unit:        'Nos',
       rate:        '0.00',
-      balance:     '0.00',
-      minQuantity: '0.00',
       remarks:     sizeStr  || null,   // Size    → remarks
       location:    remStr   || null,   // Remarks → location
       createdAt:   new Date(),

@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { useMaterialStore } from '../../stores/materialStore';
+import { useMaterialCatalogStore } from '../../stores/materialCatalogStore';
 import { Plus, Search, Edit2, Trash2, X, Info, Save } from 'lucide-react';
 
 const CAT = 'Dryer Component';
-const BLANK = { itemName:'', itemCode:'', category:CAT, unit:'Nos', balance:0, inQty:0, outQty:0, rate:0, projectSite:'', remarks:'' };
+const BLANK = { itemName:'', itemCode:'', category:CAT, unit:'Nos', rate:0, projectSite:'', remarks:'' };
 
 export default function DryerCatalogTab() {
-  const { materials, isLoading, fetchMaterials, createMaterial, updateMaterial, deleteMaterial } = useMaterialStore();
+  const { materials, isLoading, fetchMaterials, createMaterial, updateMaterial, deleteMaterial } = useMaterialCatalogStore();
   const [search, setSearch] = useState('');
   const [modal, setModal]   = useState(false);
   const [editing, setEditing] = useState(null);
@@ -30,7 +30,7 @@ export default function DryerCatalogTab() {
   const openAdd  = () => { setEditing(null); setForm(BLANK); setErr(''); setModal(true); };
   const openEdit = (m) => {
     setEditing(m);
-    setForm({ itemName:m.itemName, itemCode:m.itemCode||'', category:CAT, unit:m.unit||'Nos', balance:Number(m.balance), inQty:Number(m.inQty)||0, outQty:Number(m.outQty)||0, rate:Number(m.rate)||0, projectSite:m.projectSite||'', remarks:m.remarks||'' });
+    setForm({ itemName:m.itemName, itemCode:m.itemCode||'', category:CAT, unit:m.unit||'Nos', rate:Number(m.rate)||0, projectSite:m.projectSite||'', remarks:m.remarks||'' });
     setErr(''); setModal(true);
   };
   const save = async (e) => {
@@ -140,19 +140,7 @@ export default function DryerCatalogTab() {
                     className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-amber-400 outline-none" placeholder="Solar Dryer Phase 1"/>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3 pt-2 border-t">
-                {[['In Qty','inQty','blue'],['Out Qty','outQty','orange'],['Stock','balance','green']].map(([lbl,key,col])=>(
-                  <div key={key} className={`bg-${col}-50 p-3 rounded-xl`}>
-                    <label className={`block text-[10px] font-bold text-${col}-600 uppercase mb-1`}>{lbl}</label>
-                    <input type="number" value={form[key]} onChange={e=>{
-                      const v=Number(e.target.value)||0;
-                      if(key==='inQty') setForm(p=>({...p,inQty:v,balance:v-(Number(p.outQty)||0)}));
-                      else if(key==='outQty') setForm(p=>({...p,outQty:v,balance:(Number(p.inQty)||0)-v}));
-                      else setForm(p=>({...p,balance:v}));
-                    }} className={`w-full bg-white px-2 py-1.5 rounded-lg border border-${col}-100 outline-none text-sm`}/>
-                  </div>
-                ))}
-              </div>
+
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Remarks / Size</label>
                 <textarea rows={2} value={form.remarks} onChange={e=>setForm(p=>({...p,remarks:e.target.value}))}
