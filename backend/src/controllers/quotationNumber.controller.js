@@ -17,7 +17,7 @@ const PRODUCT_CODE_MAP = {
   'STANDARD':               'STD',
 };
 
-const RESERVATION_TTL_MINUTES = 10;
+const RESERVATION_TTL_MINUTES = 20;
 
 // ─── Formatting Helpers ────────────────────────────────────────────────────────
 const getFormatSettings = async () => {
@@ -83,12 +83,33 @@ exports.updateCounter = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid product code' });
     }
 
+    // Check if the number that would be generated already exists in quotations.
+    // If it does, fast-forward the counter past all existing records.
+    const settings = await getFormatSettings();
+    const companyCode = settings.QTN_COMPANY_CODE || 'KVB';
+    const dateFormat = settings.QTN_DATE_FORMAT || 'DDMMYY';
+    const dateStr = formatDateBySetting(new Date(), dateFormat);
+
+    let effectiveCounter = counter;
+    let bumped = false;
+    const MAX_RETRIES = 500;
+    for (let i = 0; i < MAX_RETRIES; i++) {
+      const candidate = buildQuotationNumber(companyCode, productCode, effectiveCounter + 1, 'A', dateStr);
+      const [existing] = await db.select({ id: schema.quotations.id })
+        .from(schema.quotations)
+        .where(eq(schema.quotations.quotationNumber, candidate))
+        .limit(1);
+      if (!existing) break; // candidate is free
+      effectiveCounter += 1;
+      bumped = true;
+    }
+
     const id = randomUUID();
     // Upsert using INSERT ... ON DUPLICATE KEY UPDATE
     await db.execute(sql`
       INSERT INTO quotation_counters (id, productCode, counter, updatedAt)
-      VALUES (${id}, ${productCode}, ${counter}, NOW())
-      ON DUPLICATE KEY UPDATE counter = ${counter}, updatedAt = NOW()
+      VALUES (${id}, ${productCode}, ${effectiveCounter}, NOW())
+      ON DUPLICATE KEY UPDATE counter = ${effectiveCounter}, updatedAt = NOW()
     `);
 
     const [updated] = await db.select({
@@ -101,7 +122,17 @@ exports.updateCounter = async (req, res) => {
     .where(eq(schema.quotationCounters.productCode, productCode))
     .limit(1);
 
-    res.json({ success: true, data: updated });
+    const nextPreview = buildQuotationNumber(companyCode, productCode, effectiveCounter + 1, 'A', dateStr);
+
+    res.json({
+      success: true,
+      data: updated,
+      effectiveCounter,
+      nextPreview,
+      warning: bumped
+        ? `Counter was advanced from ${counter} to ${effectiveCounter} because numbers up to ${counter} already exist in the database. Next quotation will be: ${nextPreview}`
+        : null,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -172,9 +203,46 @@ exports.reserveNumber = async (req, res) => {
       .where(eq(schema.quotationCounters.productCode, productCode))
       .limit(1);
 
-    const newCounter = Number(counterRow?.counter || 1);
+    let newCounter = Number(counterRow?.counter || 1);
     const dateStr = formatDateBySetting(now, dateFormat);
-    const quotationNumber = buildQuotationNumber(companyCode, productCode, newCounter, 'A', dateStr);
+    let quotationNumber = buildQuotationNumber(companyCode, productCode, newCounter, 'A', dateStr);
+
+    // ── Collision guard ───────────────────────────────────────────────────────
+    // If the counter was reset to a lower value, the generated number might
+    // already exist in quotations or active reservations. Keep bumping until
+    // we find a number that hasn't been used yet.
+    const MAX_RETRIES = 500;
+    let retries = 0;
+    while (retries < MAX_RETRIES) {
+      const [existingQtn] = await db.select({ id: schema.quotations.id })
+        .from(schema.quotations)
+        .where(eq(schema.quotations.quotationNumber, quotationNumber))
+        .limit(1);
+
+      const [existingRes] = await db.select({ id: schema.quotationReservations.id })
+        .from(schema.quotationReservations)
+        .where(and(
+          eq(schema.quotationReservations.quotationNumber, quotationNumber),
+          sql`expiresAt > ${now}`
+        ))
+        .limit(1);
+
+      if (!existingQtn && !existingRes) break; // number is free ✓
+
+      // This number is taken — advance the counter by one more
+      newCounter += 1;
+      quotationNumber = buildQuotationNumber(companyCode, productCode, newCounter, 'A', dateStr);
+      retries++;
+    }
+
+    // Persist the final (possibly bumped) counter so future reservations
+    // start from the right place
+    await db.execute(sql`
+      UPDATE quotation_counters
+      SET counter = ${newCounter}, updatedAt = NOW()
+      WHERE productCode = ${productCode}
+    `);
+    // ─────────────────────────────────────────────────────────────────────────
 
     const resId = randomUUID();
     const expiresAt = new Date(Date.now() + RESERVATION_TTL_MINUTES * 60 * 1000);

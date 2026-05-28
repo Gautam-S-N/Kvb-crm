@@ -3,6 +3,8 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { useNotificationStore } from '../stores/notificationStore';
 import NotificationDropdown from './NotificationDropdown';
+import useFYStore from '../stores/fyStore';
+import { getFYOptions } from '../stores/projectPlanStore';
 import {
   LayoutDashboard,
   Users,
@@ -46,7 +48,7 @@ const navItems = [
   { to: '/targets',            icon: Target,          label: 'Sales Targets',      roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/todo-list',          icon: ClipboardList,   label: 'My To-Do List',      roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/employee-tracking',  icon: UserCheck,       label: 'Employee Tracking',  roles: ['ADMIN', 'EMPLOYEE'] },
-  { to: '/material-requests',  icon: ClipboardCheck,  label: 'Material Requests',  roles: ['ADMIN', 'EMPLOYEE'] },
+  { to: '/project-planning',   icon: ClipboardCheck,  label: 'Project Planning',   roles: ['ADMIN', 'EMPLOYEE'] },
   { to: '/settings',           icon: Settings,        label: 'Settings',           roles: ['ADMIN'] },
 
   { to: '/users',              icon: UserCog,         label: 'User Management',    roles: ['ADMIN'] },
@@ -65,7 +67,7 @@ const NAV_MODULE_KEY = {
   '/targets':           'SALES_TARGETS',
   '/todo-list':         'TODO',
   '/employee-tracking': 'EMPLOYEE_TRACKING',
-  '/material-requests': 'MATERIAL_REQUESTS',
+  '/project-planning':  'PROJECT_PLANS',
 };
 
 
@@ -87,6 +89,7 @@ const Layout = ({ children }) => {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const { activeToast, clearToast } = useNotificationStore();
+  const { selectedFY, setSelectedFY, fyOptions } = useFYStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [themeMode, setThemeMode] = useState(() => localStorage.getItem('themeMode') || 'light');
 
@@ -215,6 +218,19 @@ const Layout = ({ children }) => {
             <Menu size={22} />
           </button>
           <div className="flex-1" />
+
+          {/* Global FY Selector */}
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-gray-400 hidden sm:inline">FY</span>
+            <select
+              id="global-fy-selector"
+              value={selectedFY}
+              onChange={e => setSelectedFY(e.target.value)}
+              className="text-xs border border-gray-200 dark:border-gray-600 rounded-md px-2 py-1 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 focus:ring-1 focus:ring-green-500"
+            >
+              {fyOptions.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
 
           {/* Theme toggle */}
           <button

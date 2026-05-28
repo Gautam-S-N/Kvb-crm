@@ -3,6 +3,7 @@ import Layout from '../components/Layout';
 import { useQuotationStore } from '../stores/quotationStore';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
+import useFYStore from '../stores/fyStore';
 import {
   FileText, Download, RefreshCw, Search, ArrowRight,
   CheckCircle, Clock, Send, XCircle, ChevronLeft, ChevronRight, ChevronDown
@@ -37,10 +38,12 @@ export default function Quotations() {
     setExpandedProducts(prev => ({ ...prev, [idx]: !prev[idx] }));
   };
 
+  const selectedFY = useFYStore(state => state.selectedFY);
+
   useEffect(() => {
     fetchQuotations();
     fetchProductSummary();
-  }, []);
+  }, [selectedFY]);
 
   const handleSearch = (e) => {
     e.preventDefault();

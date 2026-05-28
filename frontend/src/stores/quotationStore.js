@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '../services/api';
+import useFYStore from './fyStore';
 
 export const useQuotationStore = create((set, get) => ({
   quotations: [],
@@ -14,7 +15,8 @@ export const useQuotationStore = create((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const { pagination } = get();
-      const queryParams = new URLSearchParams({ page: pagination.page, limit: pagination.limit, ...params });
+      const fy = useFYStore.getState().selectedFY;
+      const queryParams = new URLSearchParams({ page: pagination.page, limit: pagination.limit, fy, ...params });
       const res = await api.get(`/quotations?${queryParams}`);
       set({ quotations: res.data.data, pagination: res.data.pagination, isLoading: false });
     } catch (error) {
@@ -70,7 +72,13 @@ export const useQuotationStore = create((set, get) => ({
           c.productCode === productCode ? res.data.data : c
         ),
       }));
-      return { success: true, data: res.data.data };
+      return {
+        success: true,
+        data: res.data.data,
+        warning: res.data.warning || null,
+        nextPreview: res.data.nextPreview || null,
+        effectiveCounter: res.data.effectiveCounter,
+      };
     } catch (error) {
       return { success: false, error: error.response?.data?.message };
     }

@@ -7,6 +7,7 @@ const fs = require('fs');
 const { randomUUID } = require('crypto');
 const { numberToWords } = require('../utils/numberToWords');
 const { triggerRefreshForEmployee } = require('../services/achievement.service');
+const { getFinancialYear } = require('../utils/financialYear');
 
 // Product code map for structured quotation numbers
 const PRODUCT_CODE_MAP = {
@@ -61,7 +62,8 @@ const getLogoBase64 = () => {
 exports.getQuotations = async (req, res) => {
   try {
     const { leadId, status, search, page = 1, limit = 100 } = req.query;
-    const conditions = [];
+    const fy = req.query.fy || getFinancialYear();
+    const conditions = [eq(schema.quotations.financialYear, fy)];
 
     if (leadId) conditions.push(eq(schema.quotations.leadId, leadId));
     if (status) conditions.push(eq(schema.quotations.status, status));
@@ -115,6 +117,8 @@ exports.getQuotations = async (req, res) => {
       createdById: schema.quotations.createdById,
       createdAt: schema.quotations.createdAt,
       updatedAt: schema.quotations.updatedAt,
+      versionLabel: schema.quotations.versionLabel,
+      isLatest: schema.quotations.isLatest,
       leadLeadNumber: schema.leads.leadNumber,
       leadTitle: schema.leads.title,
       customerContactName: schema.customers.contactName,
@@ -140,6 +144,8 @@ exports.getQuotations = async (req, res) => {
       templateType: r.templateType, customFields: r.customFields,
       leadId: r.leadId, customerId: r.customerId, createdById: r.createdById,
       createdAt: r.createdAt, updatedAt: r.updatedAt,
+      versionLabel: r.versionLabel,
+      isLatest: r.isLatest === 1 || r.isLatest === true,
       lead: r.leadLeadNumber ? { leadNumber: r.leadLeadNumber, title: r.leadTitle } : null,
       customer: r.customerContactName ? { contactName: r.customerContactName, companyName: r.customerCompanyName } : null,
       createdBy: r.createdByFirstName ? { firstName: r.createdByFirstName, lastName: r.createdByLastName } : null
@@ -392,6 +398,7 @@ exports.createQuotation = async (req, res) => {
       termsConditions: termsConditions || null,
       templateType,
       customFields: customFields != null ? (typeof customFields === 'string' ? JSON.parse(customFields) : customFields) : undefined,
+      financialYear: getFinancialYear(),
       createdAt: now,
       updatedAt: now
     };
@@ -1091,6 +1098,7 @@ exports.convertToSale = async (req, res) => {
         totalAmount: String(quotation.totalAmount),
         balanceAmount: String(quotation.totalAmount),
         notes: quotation.notes || null,
+        financialYear: getFinancialYear(),
         createdAt: new Date(),
         updatedAt: new Date()
       });

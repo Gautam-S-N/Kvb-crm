@@ -3,6 +3,7 @@ const { db } = require('../utils/drizzle');
 const schema = require('../models/schema');
 const { getSubordinateIds } = require('../middleware/permission.middleware');
 const { randomUUID } = require('crypto');
+const { getFinancialYear } = require('../utils/financialYear');
 
 const generateTaskId = () => `task_${Date.now()}`;
 
@@ -18,9 +19,10 @@ const countTasksQuery = async (conditions) => {
 exports.getTasks = async (req, res) => {
   try {
     const { status, priority, assignedToId, type, search, page = 1, limit = 100 } = req.query;
+    const fy = req.query.fy || getFinancialYear();
     const userId = req.user.id;
 
-    const conditions = [eq(schema.tasks.isArchived, false)];
+    const conditions = [eq(schema.tasks.isArchived, false), eq(schema.tasks.financialYear, fy)];
 
     if (req.user.role === 'EMPLOYEE') {
       const validUserIds = await getSubordinateIds(userId, true);
@@ -76,6 +78,9 @@ exports.getTasks = async (req, res) => {
         dueDate: schema.tasks.dueDate,
         completedAt: schema.tasks.completedAt,
         completedVoiceUrl: schema.tasks.completedVoiceUrl,
+        completionVoiceNote: schema.tasks.completionVoiceNote,
+        attachmentUrl: schema.tasks.attachmentUrl,
+        failureReason: schema.tasks.failureReason,
         reminderAt: schema.tasks.reminderAt,
         reminderSent: schema.tasks.reminderSent,
         createdById: schema.tasks.createdById,
@@ -105,7 +110,9 @@ exports.getTasks = async (req, res) => {
     const tasksRows = tasksRawRows.map(r => ({
       id: r.id, title: r.title, description: r.description, status: r.status,
       priority: r.priority, type: r.type, dueDate: r.dueDate, completedAt: r.completedAt,
-      completedVoiceUrl: r.completedVoiceUrl, reminderAt: r.reminderAt, reminderSent: r.reminderSent,
+      completedVoiceUrl: r.completedVoiceUrl, completionVoiceNote: r.completionVoiceNote,
+      attachmentUrl: r.attachmentUrl, failureReason: r.failureReason,
+      reminderAt: r.reminderAt, reminderSent: r.reminderSent,
       createdById: r.createdById, assignedToId: r.assignedToId, snapshotManagerId: r.snapshotManagerId,
       isArchived: r.isArchived, deletedAt: r.deletedAt, createdAt: r.createdAt, updatedAt: r.updatedAt,
       assignedTo: r.assignedToId_ ? { id: r.assignedToId_, firstName: r.assignedToFirstName, lastName: r.assignedToLastName } : null,
@@ -271,6 +278,10 @@ exports.getTaskById = async (req, res) => {
       dueDate: schema.tasks.dueDate,
       completedAt: schema.tasks.completedAt,
       completedVoiceUrl: schema.tasks.completedVoiceUrl,
+      completionVoiceNote: schema.tasks.completionVoiceNote,
+      attachmentUrl: schema.tasks.attachmentUrl,
+      failureReason: schema.tasks.failureReason,
+      assignmentVoiceUrl: schema.tasks.assignmentVoiceUrl,
       reminderAt: schema.tasks.reminderAt,
       reminderSent: schema.tasks.reminderSent,
       createdById: schema.tasks.createdById,
@@ -341,7 +352,10 @@ exports.getTaskById = async (req, res) => {
     const mappedTask = {
       id: rawTask.id, title: rawTask.title, description: rawTask.description, status: rawTask.status,
       priority: rawTask.priority, type: rawTask.type, dueDate: rawTask.dueDate, completedAt: rawTask.completedAt,
-      completedVoiceUrl: rawTask.completedVoiceUrl, reminderAt: rawTask.reminderAt, reminderSent: rawTask.reminderSent,
+      completedVoiceUrl: rawTask.completedVoiceUrl, completionVoiceNote: rawTask.completionVoiceNote,
+      attachmentUrl: rawTask.attachmentUrl, failureReason: rawTask.failureReason,
+      assignmentVoiceUrl: rawTask.assignmentVoiceUrl,
+      reminderAt: rawTask.reminderAt, reminderSent: rawTask.reminderSent,
       createdById: rawTask.createdById, assignedToId: rawTask.assignedToId, snapshotManagerId: rawTask.snapshotManagerId,
       isArchived: rawTask.isArchived, deletedAt: rawTask.deletedAt, createdAt: rawTask.createdAt, updatedAt: rawTask.updatedAt,
       assignedTo: rawTask.assignedToId_ ? { id: rawTask.assignedToId_, firstName: rawTask.assignedToFirstName, lastName: rawTask.assignedToLastName, email: rawTask.assignedToEmail } : null,
@@ -395,6 +409,7 @@ exports.createTask = async (req, res) => {
       assignmentVoiceNote: assignmentVoiceNote || null,
       status: 'PENDING',
       isArchived: false,
+      financialYear: getFinancialYear(),
       createdAt: new Date(),
       updatedAt: new Date()
     };

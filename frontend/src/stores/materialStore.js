@@ -21,9 +21,25 @@ api.interceptors.request.use((config) => {
 
 export const useMaterialStore = create((set, get) => ({
   materials: [],
+  materialHistory: [],
   isLoading: false,
   error: null,
   pagination: { page: 1, limit: 500, total: 0, pages: 1 },
+
+  fetchMaterialHistory: async (id, fy) => {
+    set({ isLoading: true, materialHistory: [], error: null });
+    try {
+      const params = {};
+      if (fy) params.fy = fy;
+      const { data } = await api.get(`/materials/${id}/history`, { params });
+      set({ materialHistory: data.data || [], isLoading: false });
+    } catch (err) {
+      set({ 
+        error: err.response?.data?.message || 'Failed to fetch history', 
+        isLoading: false 
+      });
+    }
+  },
 
   fetchMaterials: async (params = {}) => {
     set({ isLoading: true, error: null });

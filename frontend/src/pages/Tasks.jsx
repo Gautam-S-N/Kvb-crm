@@ -4,6 +4,7 @@ import { useTaskStore } from '../stores/taskStore';
 import { useAuthStore } from '../stores/authStore';
 import { useUserStore } from '../stores/userStore';
 import VoiceRecorder from '../components/VoiceRecorder/VoiceRecorder';
+import useFYStore from '../stores/fyStore';
 import {
   CheckSquare, Plus, Search, Calendar as CalIcon,
   Mic, Clock, User, CheckCircle2, XCircle, Image,
@@ -69,13 +70,15 @@ export default function Tasks() {
   // Detail Modal
   const [selectedTaskForDetail, setSelectedTaskForDetail] = useState(null);
 
+  const selectedFY = useFYStore(state => state.selectedFY);
+
   useEffect(() => {
     fetchTasks();
     fetchUsers();
     if (user?.role !== 'ADMIN') {
       fetchSubordinates().then(setSubordinates);
     }
-  }, []);
+  }, [selectedFY]);
 
   const handleSearch = (e) => {
     e.preventDefault();

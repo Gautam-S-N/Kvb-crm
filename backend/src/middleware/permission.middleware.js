@@ -69,7 +69,9 @@ const requireModule = (moduleName) => {
         .limit(1);
 
       const user = userRows[0];
-      const perms = user?.permissions || {};
+      const perms = user?.permissions 
+        ? (typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions) 
+        : {};
       const modules = perms.modules || {};
 
       if (modules[moduleName] === true) {
@@ -78,12 +80,13 @@ const requireModule = (moduleName) => {
 
       return res.status(403).json({ success: false, message: `Access denied to module: ${moduleName}` });
     } catch (error) {
+      console.error('[requireModule] failed:', error);
       return res.status(500).json({ success: false, message: 'Permission check failed' });
     }
   };
 };
 
-const NATIVE_PERM_COLUMNS = ['canAssignLeads', 'canAssignTasks', 'canViewSubordinates', 'canCreateMaterialRequests'];
+const NATIVE_PERM_COLUMNS = ['canAssignLeads', 'canAssignTasks', 'canViewSubordinates', 'canCreateMaterialRequests', 'canCreateProjectPlans'];
 
 const requireElevated = (permissionName) => {
   return async (req, res, next) => {
@@ -113,7 +116,9 @@ const requireElevated = (permissionName) => {
         .limit(1);
 
       const user = userRows[0];
-      const perms = user?.permissions || {};
+      const perms = user?.permissions 
+        ? (typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions) 
+        : {};
       if (perms[permissionName] === true) return next();
 
       return res.status(403).json({ success: false, message: `Missing elevated permission: ${permissionName}` });

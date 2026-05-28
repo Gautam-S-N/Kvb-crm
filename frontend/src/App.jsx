@@ -26,12 +26,13 @@ import EmployeeTracking  from './pages/EmployeeTracking';
 import Quotations        from './pages/Quotations';
 import Inventory         from './pages/Inventory';
 import MaterialRequests  from './pages/MaterialRequests';
+import ProjectPlanning   from './pages/ProjectPlanning';
 
 
 
 
 // Auth guard helper
-const PrivateRoute = ({ element, roles }) => {
+const PrivateRoute = ({ element, roles, module }) => {
   const { isAuthenticated, user } = useAuthStore();
   
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -39,6 +40,16 @@ const PrivateRoute = ({ element, roles }) => {
   // If specific roles are required, check against logged-in user's role
   if (roles && user && !roles.includes(user.role)) {
     return <Navigate to="/dashboard" replace />;
+  }
+
+  // If a specific module permission is required for non-admins, check it
+  if (module && user && user.role !== 'ADMIN') {
+    const perms = user.permissions
+      ? (typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions)
+      : null;
+    if (!perms?.modules?.[module]) {
+      return <Navigate to="/dashboard" replace />;
+    }
   }
   
   return element;
@@ -84,6 +95,9 @@ function App() {
         } else if (module === 'MATERIAL_REQUESTS') {
           const { useMaterialRequestStore } = await import('./stores/materialRequestStore');
           useMaterialRequestStore.getState().fetchRequests();
+        } else if (module === 'PROJECT_PLANS') {
+          const useProjectPlanStore = (await import('./stores/projectPlanStore')).default;
+          useProjectPlanStore.getState().fetchPlans();
         } else if (module === 'TARGETS') {
 
           const { useTargetStore } = await import('./stores/targetStore');
@@ -109,36 +123,36 @@ function App() {
 
         {/* Private — wrapped in Layout inside each page */}
         <Route path="/dashboard"   element={<PrivateRoute element={<Dashboard />} />} />
-        <Route path="/leads"       element={<PrivateRoute element={<Leads />} />} />
-        <Route path="/leads/:id"   element={<PrivateRoute element={<LeadDetail />} />} />
-        <Route path="/sales"       element={<PrivateRoute element={<Sales />} />} />
-        <Route path="/sales/new"   element={<PrivateRoute element={<CreateSale />} />} />
-        <Route path="/sales/:id"   element={<PrivateRoute element={<SaleDetail />} />} />
+        <Route path="/leads"       element={<PrivateRoute element={<Leads />} module="LEADS" />} />
+        <Route path="/leads/:id"   element={<PrivateRoute element={<LeadDetail />} module="LEADS" />} />
+        <Route path="/sales"       element={<PrivateRoute element={<Sales />} module="SALES" />} />
+        <Route path="/sales/new"   element={<PrivateRoute element={<CreateSale />} module="SALES" />} />
+        <Route path="/sales/:id"   element={<PrivateRoute element={<SaleDetail />} module="SALES" />} />
         {/* Products / Purchase / Inventory: ADMIN always, or EMPLOYEE if granted via permissions */}
-        <Route path="/products"    element={<PrivateRoute element={<Products />} />} />
+        <Route path="/products"    element={<PrivateRoute element={<Products />} module="PRODUCTS" />} />
         <Route path="/vendors"     element={<PrivateRoute element={<Vendors />} roles={['ADMIN']} />} />
-        <Route path="/purchase"    element={<PrivateRoute element={<PurchaseOrders />} />} />
-        <Route path="/purchase/new" element={<PrivateRoute element={<CreatePurchaseOrder />} />} />
-        <Route path="/purchase/edit/:id" element={<PrivateRoute element={<CreatePurchaseOrder />} />} />
-        <Route path="/purchase/items" element={<PrivateRoute element={<PurchaseItems />} />} />
-        <Route path="/inventory"         element={<PrivateRoute element={<Inventory />} />} />
-        <Route path="/material-requests"  element={<PrivateRoute element={<MaterialRequests />} />} />
+        <Route path="/purchase"    element={<PrivateRoute element={<PurchaseOrders />} module="PURCHASE" />} />
+        <Route path="/purchase/new" element={<PrivateRoute element={<CreatePurchaseOrder />} module="PURCHASE" />} />
+        <Route path="/purchase/edit/:id" element={<PrivateRoute element={<CreatePurchaseOrder />} module="PURCHASE" />} />
+        <Route path="/purchase/items" element={<PrivateRoute element={<PurchaseItems />} module="PURCHASE" />} />
+        <Route path="/inventory"         element={<PrivateRoute element={<Inventory />} module="INVENTORY" />} />
+        <Route path="/material-requests"  element={<Navigate to="/project-planning" replace />} />
+        <Route path="/project-planning"   element={<PrivateRoute element={<ProjectPlanning />} module="PROJECT_PLANS" />} />
 
 
-
-        <Route path="/tasks"       element={<PrivateRoute element={<Tasks />} />} />
-        <Route path="/daily-reports" element={<PrivateRoute element={<DailyReports />} />} />
-        <Route path="/targets"       element={<PrivateRoute element={<SalesTargets />} />} />
+        <Route path="/tasks"       element={<PrivateRoute element={<Tasks />} module="TASKS" />} />
+        <Route path="/daily-reports" element={<PrivateRoute element={<DailyReports />} module="DAILY_REPORTS" />} />
+        <Route path="/targets"       element={<PrivateRoute element={<SalesTargets />} module="SALES_TARGETS" />} />
         <Route path="/campaigns"     element={<PrivateRoute element={<Campaigns />} />} />
 
         {/* Dedicated Quotations page */}
-        <Route path="/quotations"    element={<PrivateRoute element={<Quotations />} />} />
+        <Route path="/quotations"    element={<PrivateRoute element={<Quotations />} module="QUOTATIONS" />} />
         
         <Route path="/users"         element={<PrivateRoute element={<UserManagement />} roles={['ADMIN']} />} />
         <Route path="/settings"      element={<PrivateRoute element={<Settings />} roles={['ADMIN']} />} />
-        <Route path="/todo-list"     element={<PrivateRoute element={<TodoList />} />} />
+        <Route path="/todo-list"     element={<PrivateRoute element={<TodoList />} module="TODO" />} />
         {/* Employee Tracking: ADMIN always, or EMPLOYEE if canViewSubordinates granted */}
-        <Route path="/employee-tracking" element={<PrivateRoute element={<EmployeeTracking />} />} />
+        <Route path="/employee-tracking" element={<PrivateRoute element={<EmployeeTracking />} module="EMPLOYEE_TRACKING" />} />
 
         {/* Default */}
         <Route path="/" element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} />} />

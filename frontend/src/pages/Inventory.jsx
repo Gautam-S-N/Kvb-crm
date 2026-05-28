@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import { useMaterialStore } from '../stores/materialStore';
+import MaterialHistoryDrawer from '../components/MaterialHistoryDrawer';
 import api from '../services/api';
 import { 
   Plus, Search, Edit2, Trash2, AlertTriangle, 
-  Package, X, Calendar, MapPin, Tag, Info, CheckCircle2
+  Package, X, Calendar, MapPin, Tag, Info, CheckCircle2, History
 } from 'lucide-react';
 
 const DC_RAW_CATS = ['Sq. Tube', 'Flat Plate', 'Rec. Tube', 'Hardware', 'Round Tube', 'Round Rod', 'L Angle', 'C Channel'];
@@ -17,6 +18,7 @@ const Inventory = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState(null);
   const [submitError, setSubmitError] = useState('');
+  const [activeHistoryMaterial, setActiveHistoryMaterial] = useState(null);
 
 
   // Item code stock lookup state (aggregated across ALL records with the same code)
@@ -331,6 +333,9 @@ const Inventory = () => {
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
+                        <button onClick={() => setActiveHistoryMaterial(m)} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-md transition-colors" title="Usage History">
+                          <History size={14} />
+                        </button>
                         <button onClick={() => handleOpenModal(m)} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition-colors" title="Edit">
                           <Edit2 size={14} />
                         </button>
@@ -589,6 +594,13 @@ const Inventory = () => {
             </form>
           </div>
         </div>
+      )}
+      
+      {activeHistoryMaterial && (
+        <MaterialHistoryDrawer 
+          material={activeHistoryMaterial} 
+          onClose={() => setActiveHistoryMaterial(null)} 
+        />
       )}
     </Layout>
   );

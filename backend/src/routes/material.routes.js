@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const materialController = require('../controllers/material.controller');
+const historyController = require('../controllers/materialUsageHistory.controller');
 const { authMiddleware, authorize } = require('../middleware/auth.middleware');
 
 // All inventory routes are protected
@@ -8,6 +9,7 @@ router.use(authMiddleware);
 
 router.get('/', materialController.getMaterials);
 router.get('/stock-summary', materialController.getStockSummary);
+router.get('/:id/history', historyController.getByMaterial);
 router.get('/:id', materialController.getMaterialById);
 
 // Only administrators can modify inventory

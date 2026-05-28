@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { usePurchaseStore } from '../stores/purchaseStore';
 import { usePurchaseItemStore } from '../stores/purchaseItemStore';
 import { ArrowLeft, Save, Plus, Trash2 } from 'lucide-react';
+import api from '../services/api';
 
 // Yellow cell input style — matches the PO yellow cells
 const YI = 'w-full bg-yellow-100 border-0 outline-none text-sm px-1 py-0 font-medium placeholder-yellow-400 focus:bg-yellow-200 transition-colors';
@@ -13,10 +14,17 @@ const YR = 'w-full bg-yellow-100 border-0 outline-none text-sm px-1 py-0 text-ri
 export default function CreatePurchaseOrder() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { createPurchaseOrder, updatePurchaseOrder, getPurchaseOrder, isLoading } = usePurchaseStore();
   const { items: catalogItems, fetchItems: fetchCatalogItems } = usePurchaseItemStore();
+  const [registeredVendors, setRegisteredVendors] = useState([]);
 
-  useEffect(() => { fetchCatalogItems(); }, []);
+  useEffect(() => {
+    fetchCatalogItems();
+    api.get('/vendors?limit=200').then(r => {
+      setRegisteredVendors(r.data.data || []);
+    }).catch(() => {});
+  }, []);
 
   // PO Header
   const today = new Date().toISOString().split('T')[0];
@@ -25,11 +33,58 @@ export default function CreatePurchaseOrder() {
   const [poDate, setPoDate] = useState(today);
 
   // Vendor (left yellow — free text)
-  const [vendorName, setVendorName] = useState('');
+  const [vendorName, setVendorName] = useState(() => {
+    if (location.state?.vendorName && !id) {
+      return location.state.vendorName;
+    }
+    return '';
+  });
   const [vendorGstin, setVendorGstin] = useState('');
   const [vendorAddress, setVendorAddress] = useState('');
   const [vendorPinCode, setVendorPinCode] = useState('');
   const [vendorPhone, setVendorPhone] = useState('');
+
+  // Fetch Vendor Autocomplete details if a Supplier Name is pre-filled from project planning
+  useEffect(() => {
+    const rawVendorName = location.state?.vendorName;
+    if (rawVendorName && !id) {
+      const term = rawVendorName.trim();
+      // If we already have the full list of vendors, try to find the match synchronously first
+      if (registeredVendors.length > 0) {
+        const exactMatch = registeredVendors.find(
+          v => v.companyName.trim().toLowerCase() === term.toLowerCase()
+        );
+        if (exactMatch) {
+          setVendorName(exactMatch.companyName);
+          setVendorGstin(exactMatch.gstNumber || '');
+          setVendorAddress(exactMatch.address || '');
+          setVendorPinCode(exactMatch.pinCode || '');
+          setVendorPhone(exactMatch.phone || '');
+          return;
+        }
+      }
+      api.get(`/vendors?search=${encodeURIComponent(term)}`)
+        .then(r => {
+          const list = r.data.data || [];
+          const exactMatch = list.find(
+            v => v.companyName.trim().toLowerCase() === term.toLowerCase()
+          );
+          const matched = exactMatch || list[0]; // Fallback to first search result
+          if (matched) {
+            setVendorName(matched.companyName);
+            setVendorGstin(matched.gstNumber || '');
+            setVendorAddress(matched.address || '');
+            setVendorPinCode(matched.pinCode || '');
+            setVendorPhone(matched.phone || '');
+          } else {
+            setVendorName(term);
+          }
+        })
+        .catch(() => {
+          setVendorName(term);
+        });
+    }
+  }, [location.state?.vendorName, id, registeredVendors]);
 
   // Ship To (right yellow — editable defaults)
   const [shipAddress, setShipAddress] = useState('1st Floor, RHK Building, BVB Campus, Hubblli.');
@@ -42,16 +97,59 @@ export default function CreatePurchaseOrder() {
   const [deliveryDate, setDeliveryDate] = useState('');
 
   // Comments
-  const [comments, setComments] = useState('');
+  const [comments, setComments] = useState(() => {
+    if (location.state?.projectName && !id) {
+      return `Created from Project Plan: ${location.state.projectName}`;
+    }
+    return '';
+  });
 
   // Tax
   const [gstRate, setGstRate] = useState(18);
   const [roundOff, setRoundOff] = useState('');
 
   // Items
-  const [items, setItems] = useState([
-    { purchaseItemId: null, itemName: '', hsnCode: '', quantity: '', unitPrice: '' }
-  ]);
+  const [items, setItems] = useState(() => {
+    if (location.state?.prefilledItems && !id) {
+      return location.state.prefilledItems.map(it => ({
+        purchaseItemId: it.purchaseItemId || null,
+        itemName: it.itemName || '',
+        hsnCode: it.hsnCode || '',
+        quantity: it.quantity || '',
+        unitPrice: it.unitPrice || '',
+        projectPlanItemId: it.projectPlanItemId || null
+      }));
+    }
+    return [{ purchaseItemId: null, itemName: '', hsnCode: '', quantity: '', unitPrice: '', projectPlanItemId: null }];
+  });
+
+  // Auto-match prefilled items with catalog items once the catalog loads
+  useEffect(() => {
+    if (catalogItems.length > 0) {
+      let changed = false;
+      const nextItems = items.map(it => {
+        if (!it.purchaseItemId && it.itemName) {
+          const match = catalogItems.find(
+            ci => ci.name.trim().toLowerCase() === it.itemName.trim().toLowerCase()
+          );
+          if (match) {
+            changed = true;
+            return {
+              ...it,
+              purchaseItemId: match.id,
+              itemName: match.name,
+              hsnCode: match.hsnCode || it.hsnCode || '',
+              unitPrice: match.rate || it.unitPrice || '',
+            };
+          }
+        }
+        return it;
+      });
+      if (changed) {
+        setItems(nextItems);
+      }
+    }
+  }, [catalogItems]);
 
   const [error, setError] = useState('');
 
@@ -96,7 +194,7 @@ export default function CreatePurchaseOrder() {
     }
   }, [id, getPurchaseOrder]);
 
-  const addItem = () => setItems([...items, { purchaseItemId: null, itemName: '', hsnCode: '', quantity: '', unitPrice: '' }]);
+  const addItem = () => setItems([...items, { purchaseItemId: null, itemName: '', hsnCode: '', quantity: '', unitPrice: '', projectPlanItemId: null }]);
   const removeItem = (i) => items.length > 1 && setItems(items.filter((_, idx) => idx !== i));
   const upd = (i, f, v) => { const n = [...items]; n[i][f] = v; setItems(n); };
 
@@ -124,6 +222,7 @@ export default function CreatePurchaseOrder() {
         hsnCode: it.hsnCode || '',
         quantity: +it.quantity || 0,
         unitPrice: +it.unitPrice || 0,
+        projectPlanItemId: it.projectPlanItemId || null,
       }))
     };
 
@@ -206,8 +305,31 @@ export default function CreatePurchaseOrder() {
                 <td className="border border-gray-400 bg-yellow-100 px-2 py-0.5">
                   <div className="flex items-center gap-1">
                     <span className="text-xs font-semibold text-gray-600 whitespace-nowrap">Name Of Company:</span>
-                    <input value={vendorName} onChange={e => setVendorName(e.target.value)} required
-                      className={YI} placeholder="Enter vendor company name" />
+                    <input
+                      list="vendors-datalist"
+                      value={vendorName}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setVendorName(val);
+                        const matched = registeredVendors.find(
+                          v => v.companyName.toLowerCase() === val.toLowerCase()
+                        );
+                        if (matched) {
+                          setVendorGstin(matched.gstNumber || '');
+                          setVendorAddress(matched.address || '');
+                          setVendorPinCode(matched.pinCode || '');
+                          setVendorPhone(matched.phone || '');
+                        }
+                      }}
+                      required
+                      className={YI}
+                      placeholder="Enter vendor company name"
+                    />
+                    <datalist id="vendors-datalist">
+                      {registeredVendors.map(v => (
+                        <option key={v.id} value={v.companyName} />
+                      ))}
+                    </datalist>
                   </div>
                 </td>
                 <td className="border border-gray-400 px-2 py-0.5 text-sm">

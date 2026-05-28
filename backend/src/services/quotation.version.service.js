@@ -2,6 +2,7 @@ const { eq, and, or, sql, inArray, asc } = require('drizzle-orm');
 const { db } = require('../utils/drizzle');
 const schema = require('../models/schema');
 const { randomUUID } = require('crypto');
+const { getFinancialYear } = require('../utils/financialYear');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,7 @@ const getVersionChain = async (quotationId) => {
     isLatest: schema.quotations.isLatest,
     parentId: schema.quotations.parentId,
     originalDate: schema.quotations.originalDate,
+    financialYear: schema.quotations.financialYear,
     createdByFirstName: schema.users.firstName,
     createdByLastName: schema.users.lastName,
     customerContactName: schema.customers.contactName,
@@ -130,6 +132,7 @@ const getVersionChain = async (quotationId) => {
     isLatest: q.isLatest,
     parentId: q.parentId,
     originalDate: q.originalDate,
+    financialYear: q.financialYear,
     createdBy: q.createdByFirstName ? {
       firstName: q.createdByFirstName,
       lastName: q.createdByLastName
@@ -351,6 +354,7 @@ const createRevision = async (quotationId, overrides, performedByUserId) => {
       isLatest: true,
       parentId: rootId,
       originalDate: latest.originalDate ? new Date(latest.originalDate) : null,
+      financialYear: latest.financialYear || getFinancialYear(),
       createdAt: now,
       updatedAt: now
     });

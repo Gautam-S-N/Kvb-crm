@@ -21,6 +21,7 @@ const ALL_MODULES = [
   { key: 'TODO', label: 'My To-Do List' },
   { key: 'EMPLOYEE_TRACKING', label: 'Employee Tracking' },
   { key: 'MATERIAL_REQUESTS', label: 'Material Requests' },
+  { key: 'PROJECT_PLANS', label: 'Project Planning' },
 ];
 
 
@@ -28,12 +29,13 @@ const DEFAULT_PERMISSIONS = {
   modules: {
     LEADS: false, QUOTATIONS: false, SALES: false, PRODUCTS: false,
     PURCHASE: false, INVENTORY: false, TASKS: false, DAILY_REPORTS: false,
-    SALES_TARGETS: false, TODO: false, EMPLOYEE_TRACKING: false, MATERIAL_REQUESTS: false,
+    SALES_TARGETS: false, TODO: false, EMPLOYEE_TRACKING: false, MATERIAL_REQUESTS: false, PROJECT_PLANS: false,
   },
   canAssignTasks: false,
   canAssignLeads: false,
   canViewSubordinates: false,
   canCreateMaterialRequests: false,
+  canCreateProjectPlans: false,
 };
 
 
@@ -324,6 +326,7 @@ export default function UserManagement() {
                         {perms.canAssignLeads && <PermBadge label="Assign Leads" color="green" />}
                         {perms.canViewSubordinates && <PermBadge label="Team View" color="purple" />}
                         {perms.canCreateMaterialRequests && <PermBadge label="Material Requests" color="teal" />}
+                        {perms.canCreateProjectPlans && <PermBadge label="Project Plans" color="teal" />}
 
                       </div>
                     )}
@@ -568,6 +571,14 @@ export default function UserManagement() {
                         />
                         <p className="text-xs text-gray-400 ml-3 -mt-1 mb-1">Without this, they can only view and action requests assigned to them.</p>
                       </div>
+                      <div className="py-3">
+                        <Toggle
+                          label="📋 Project Planning — Can create and manage project plans"
+                          checked={permissions.canCreateProjectPlans || false}
+                          onChange={v => setElevated('canCreateProjectPlans', v)}
+                        />
+                        <p className="text-xs text-gray-400 ml-3 -mt-1 mb-1">Without this, they can view project plans but cannot create or modify them.</p>
+                      </div>
 
                     </div>
                   </>
@@ -592,6 +603,7 @@ export default function UserManagement() {
                       {lastSavedPerms.canAssignTasks && <span className="px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded font-semibold text-[10px]">Assign Tasks ✓</span>}
                       {lastSavedPerms.canViewSubordinates && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded font-semibold text-[10px]">Team View ✓</span>}
                       {lastSavedPerms.canCreateMaterialRequests && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded font-semibold text-[10px]">Material Requests ✓</span>}
+                      {lastSavedPerms.canCreateProjectPlans && <span className="px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded font-semibold text-[10px]">Project Plans ✓</span>}
 
                       {Object.entries(lastSavedPerms.modules || {}).filter(([,v]) => v).length === 0 && !lastSavedPerms.canAssignLeads && !lastSavedPerms.canAssignTasks && !lastSavedPerms.canViewSubordinates && (
                         <span className="text-gray-500 italic">No permissions granted</span>

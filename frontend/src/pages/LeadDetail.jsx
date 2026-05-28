@@ -290,7 +290,7 @@ const LeadDetail = () => {
       cylinderCostPerDay, cylinderCostMonthly, cylinderCostAnnually,
       electricityCostAnnually, totalCost1YearCurrent, totalCost10YearsCurrent,
       totalCost1YearProposed, tenYearMaintenanceCost, totalCost10YearsProposed, savings,
-      roiYears, dailySavings, annualSavings: dailySavings * 300
+      roiYears, roi: roiYears, dailySavings, annualSavings: dailySavings * 300
     };
   };
 
@@ -1858,15 +1858,27 @@ const LeadDetail = () => {
                                 </div>
                               </div>
 
-                              <div className="bg-sky-50 p-2 rounded border border-sky-100 flex justify-between items-center transition-all">
-                                <div className="text-[10px] text-sky-800 font-medium">
-                                  <strong>10-Year Totals Preview:</strong><br />
-                                  Current: ₹{(calcSchefflerROI().totalCost10YearsCurrent).toLocaleString('en-IN')}<br />
-                                  Proposed: ₹{(calcSchefflerROI().totalCost10YearsProposed).toLocaleString('en-IN')}
-                                </div>
-                                <div className="text-right">
-                                  <div className="text-[10px] font-bold text-sky-600 uppercase">10-Yr Savings</div>
-                                  <div className="text-lg font-bold text-green-700">₹{(calcSchefflerROI().savings).toLocaleString('en-IN')}</div>
+                              <div className="bg-gradient-to-br from-sky-50 to-indigo-50 p-4 rounded-xl border border-sky-100 space-y-3 transition-all shadow-sm">
+                                <div className="flex justify-between items-center">
+                                  <div className="text-xs text-sky-800 font-medium space-y-1">
+                                    <strong className="block text-indigo-900 text-sm mb-1 font-bold">10-Year Economic Outlook:</strong>
+                                    <div className="flex justify-between w-48">
+                                      <span className="text-gray-500">Current Scenario:</span>
+                                      <span className="font-semibold text-gray-700">₹{(calcSchefflerROI().totalCost10YearsCurrent).toLocaleString('en-IN')}</span>
+                                    </div>
+                                    <div className="flex justify-between w-48">
+                                      <span className="text-gray-500">Proposed (Solar):</span>
+                                      <span className="font-semibold text-gray-700">₹{(calcSchefflerROI().totalCost10YearsProposed).toLocaleString('en-IN')}</span>
+                                    </div>
+                                  </div>
+                                  <div className="text-right border-l border-sky-200/60 pl-4">
+                                    <div className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">Payback Period (ROI)</div>
+                                    <div className="text-xl font-black text-indigo-700">
+                                      {calcSchefflerROI().roiYears} <span className="text-xs font-normal">Years</span>
+                                    </div>
+                                    <div className="text-[10px] font-bold text-green-600 uppercase tracking-wider mt-2">10-Yr Net Savings</div>
+                                    <div className="text-lg font-extrabold text-green-700">₹{(calcSchefflerROI().savings).toLocaleString('en-IN')}</div>
+                                  </div>
                                 </div>
                               </div>
                             </div>

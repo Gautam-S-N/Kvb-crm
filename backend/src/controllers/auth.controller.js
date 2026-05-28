@@ -41,7 +41,8 @@ exports.register = async (req, res) => {
       canAssignLeads: false,
       canAssignTasks: false,
       canViewSubordinates: false,
-      canCreateMaterialRequests: false
+      canCreateMaterialRequests: false,
+      canCreateProjectPlans: false
     };
 
     await db.insert(schema.users).values(newUser);
@@ -144,7 +145,8 @@ exports.me = async (req, res) => {
       canAssignLeads: schema.users.canAssignLeads,
       canAssignTasks: schema.users.canAssignTasks,
       canViewSubordinates: schema.users.canViewSubordinates,
-      canCreateMaterialRequests: schema.users.canCreateMaterialRequests
+      canCreateMaterialRequests: schema.users.canCreateMaterialRequests,
+      canCreateProjectPlans: schema.users.canCreateProjectPlans
     })
     .from(schema.users)
     .where(eq(schema.users.id, req.user.id))
