@@ -8,6 +8,7 @@
     "dev": "nodemon --signal SIGKILL src/server.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:seed": "node scripts/seed.js",
     "db:studio": "drizzle-kit studio"
   },
   "keywords": [],

@@ -52,6 +52,7 @@ const purchaseOrders = mysqlTable('purchase_orders', {
   createdById: varchar('createdById', { length: 36 }).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().notNull(),
+  financialYear: varchar('financialYear', { length: 10 }),
 });
 
 const purchaseOrderItems = mysqlTable('purchase_order_items', {
@@ -107,8 +108,10 @@ const users = mysqlTable('users', {
   canAssignTasks: boolean('canAssignTasks').default(false).notNull(),
   canViewSubordinates: boolean('canViewSubordinates').default(false).notNull(),
   canCreateMaterialRequests: boolean('canCreateMaterialRequests').default(false).notNull(),
+  canCreateProjectPlans: boolean('canCreateProjectPlans').default(false).notNull(),
   delegatedManagerId: varchar('delegatedManagerId', { length: 36 }),
   delegationExpiresAt: timestamp('delegationExpiresAt'),
+  currentSessionId: varchar('currentSessionId', { length: 255 }),
 });
 
 // ============================================
@@ -203,6 +206,7 @@ const tasks = mysqlTable('tasks', {
   updatedAt: timestamp('updatedAt').defaultNow().notNull(),
   attachmentUrl: varchar('attachmentUrl', { length: 255 }),
   failureReason: text('failureReason'),
+  financialYear: varchar('financialYear', { length: 10 }),
 });
 
 const taskChecklistItems = mysqlTable('task_checklist_items', {
@@ -366,6 +370,7 @@ const leads = mysqlTable('leads', {
   deletedAt: timestamp('deletedAt'),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().notNull(),
+  financialYear: varchar('financialYear', { length: 10 }),
 });
 
 const leadProducts = mysqlTable('lead_products', {
@@ -441,6 +446,7 @@ const quotations = mysqlTable('quotations', {
   isLatest: boolean('isLatest').default(true).notNull(),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().notNull(),
+  financialYear: varchar('financialYear', { length: 10 }),
 });
 
 const quotationCounters = mysqlTable('quotation_counters', {
@@ -492,6 +498,7 @@ const sales = mysqlTable('sales', {
   quotationId: varchar('quotationId', { length: 36 }),
   createdAt: timestamp('createdAt').defaultNow().notNull(),
   updatedAt: timestamp('updatedAt').defaultNow().notNull(),
+  financialYear: varchar('financialYear', { length: 10 }),
 });
 
 const saleItems = mysqlTable('sale_items', {
@@ -565,6 +572,81 @@ const notes = mysqlTable('notes', {
   createdAt: timestamp('createdAt').defaultNow().notNull(),
 });
 
+// ============================================
+// PROJECT PLANNING MODULE
+// ============================================
+const projectPlans = mysqlTable('project_plans', {
+  id:            varchar('id', { length: 36 }).primaryKey(),
+  projectName:   varchar('projectName', { length: 255 }).notNull(),
+  place:         varchar('place', { length: 255 }).notNull(),
+  status:        varchar('status', { length: 255 }).default('ACTIVE').notNull(),
+  financialYear: varchar('financialYear', { length: 10 }).notNull(),
+  isArchived:    boolean('isArchived').default(false).notNull(),
+  completedAt:   timestamp('completedAt'),
+  createdById:   varchar('createdById', { length: 36 }).notNull(),
+  createdAt:     timestamp('createdAt').defaultNow().notNull(),
+  updatedAt:     timestamp('updatedAt').defaultNow().notNull(),
+});
+
+const projectPlanItems = mysqlTable('project_plan_items', {
+  id:              varchar('id', { length: 36 }).primaryKey(),
+  projectPlanId:   varchar('projectPlanId', { length: 36 }).notNull(),
+  category:        varchar('category', { length: 50 }).notNull(), // 'RAW_MATERIAL' | 'BOP'
+  itemName:        varchar('itemName', { length: 255 }).notNull(),
+  size:            varchar('size', { length: 255 }),
+  quantity:        decimal('quantity', { precision: 15, scale: 2 }).notNull(),
+  supplierName:    varchar('supplierName', { length: 255 }),
+  remarks:         text('remarks'),
+  fulfillmentType: varchar('fulfillmentType', { length: 50 }).default('PENDING').notNull(),
+  reservedQty:     decimal('reservedQty', { precision: 15, scale: 2 }).default('0.00').notNull(),
+  collectedQty:    decimal('collectedQty', { precision: 15, scale: 2 }).default('0.00').notNull(),
+  inventoryItemId: varchar('inventoryItemId', { length: 36 }),
+  purchaseOrderId: varchar('purchaseOrderId', { length: 36 }),
+  createdAt:       timestamp('createdAt').defaultNow().notNull(),
+  updatedAt:       timestamp('updatedAt').defaultNow().notNull(),
+});
+
+const projectInventoryReservations = mysqlTable('project_inventory_reservations', {
+  id:            varchar('id', { length: 36 }).primaryKey(),
+  projectPlanId: varchar('projectPlanId', { length: 36 }).notNull(),
+  projectItemId: varchar('projectItemId', { length: 36 }).notNull(),
+  materialId:    varchar('materialId', { length: 36 }).notNull(),
+  reservedQty:   decimal('reservedQty', { precision: 15, scale: 2 }).notNull(),
+  releasedQty:   decimal('releasedQty', { precision: 15, scale: 2 }).default('0.00').notNull(),
+  status:        varchar('status', { length: 50 }).default('ACTIVE').notNull(),
+  createdAt:     timestamp('createdAt').defaultNow().notNull(),
+  updatedAt:     timestamp('updatedAt').defaultNow().notNull(),
+});
+
+const projectCollectionTasks = mysqlTable('project_collection_tasks', {
+  id:            varchar('id', { length: 36 }).primaryKey(),
+  projectPlanId: varchar('projectPlanId', { length: 36 }).notNull(),
+  projectItemId: varchar('projectItemId', { length: 36 }).notNull(),
+  assignedToId:  varchar('assignedToId', { length: 36 }).notNull(),
+  assignedById:  varchar('assignedById', { length: 36 }).notNull(),
+  qtyToCollect:  decimal('qtyToCollect', { precision: 15, scale: 2 }).notNull(),
+  qtyCollected:  decimal('qtyCollected', { precision: 15, scale: 2 }).default('0.00').notNull(),
+  status:        varchar('status', { length: 50 }).default('PENDING').notNull(),
+  note:          text('note'),
+  collectedAt:   timestamp('collectedAt'),
+  createdAt:     timestamp('createdAt').defaultNow().notNull(),
+  updatedAt:     timestamp('updatedAt').defaultNow().notNull(),
+});
+
+const materialUsageHistory = mysqlTable('material_usage_history', {
+  id:            varchar('id', { length: 36 }).primaryKey(),
+  materialId:    varchar('materialId', { length: 36 }).notNull(),
+  projectPlanId: varchar('projectPlanId', { length: 36 }).notNull(),
+  projectName:   varchar('projectName', { length: 255 }).notNull(),
+  action:        varchar('action', { length: 50 }).notNull(), // 'RESERVED' | 'COLLECTED' | 'RELEASED'
+  qty:           decimal('qty', { precision: 15, scale: 2 }).notNull(),
+  performedById: varchar('performedById', { length: 36 }).notNull(),
+  note:          text('note'),
+  financialYear: varchar('financialYear', { length: 10 }),
+  createdAt:     timestamp('createdAt').defaultNow().notNull(),
+});
+
+
 module.exports = {
   settings,
   vendors,
@@ -599,4 +681,10 @@ module.exports = {
   bulkMessageLogs,
   notes,
   materialCatalog,
+  // Project Planning Module
+  projectPlans,
+  projectPlanItems,
+  projectInventoryReservations,
+  projectCollectionTasks,
+  materialUsageHistory,
 };

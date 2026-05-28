@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '../services/api';
+import useFYStore from './fyStore';
 
 export const useLeadStore = create((set, get) => ({
   leads: [],
@@ -13,7 +14,8 @@ export const useLeadStore = create((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const { filters, pagination } = get();
-      const queryParams = new URLSearchParams({ page: pagination.page, limit: pagination.limit, ...filters, ...params });
+      const fy = useFYStore.getState().selectedFY;
+      const queryParams = new URLSearchParams({ page: pagination.page, limit: pagination.limit, fy, ...filters, ...params });
       const response = await api.get(`/leads?${queryParams}`);
       set({ leads: response.data.data, pagination: response.data.pagination, isLoading: false });
     } catch (error) {

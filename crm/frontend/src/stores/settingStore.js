@@ -3,6 +3,7 @@ import api from '../services/api';
 
 export const useSettingStore = create((set) => ({
   settings: [],
+  invoiceCounter: null,   // { currentCount, counterOffset, nextNumber, prefix, dateStr }
   isLoading: false,
   error: null,
 
@@ -33,5 +34,24 @@ export const useSettingStore = create((set) => ({
       set({ error: err.response?.data?.message, isLoading: false });
       return { success: false, error: err.response?.data?.message };
     }
-  }
+  },
+
+  fetchInvoiceCounter: async () => {
+    try {
+      const res = await api.get('/settings/invoice-counter');
+      set({ invoiceCounter: res.data.data });
+      return { success: true, data: res.data.data };
+    } catch (err) {
+      return { success: false, error: err.response?.data?.message };
+    }
+  },
+
+  setInvoiceCounter: async (nextValue) => {
+    try {
+      const res = await api.put('/settings/invoice-counter', { nextValue });
+      return { success: true, data: res.data.data, message: res.data.data.message };
+    } catch (err) {
+      return { success: false, error: err.response?.data?.message };
+    }
+  },
 }));

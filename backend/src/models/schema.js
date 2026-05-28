@@ -111,6 +111,7 @@ const users = mysqlTable('users', {
   canCreateProjectPlans: boolean('canCreateProjectPlans').default(false).notNull(),
   delegatedManagerId: varchar('delegatedManagerId', { length: 36 }),
   delegationExpiresAt: timestamp('delegationExpiresAt'),
+  currentSessionId: varchar('currentSessionId', { length: 255 }),
 });
 
 // ============================================

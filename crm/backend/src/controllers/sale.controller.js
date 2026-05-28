@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { triggerRefreshForEmployee } = require('../services/achievement.service');
 const { randomUUID } = require('crypto');
+const { getFinancialYear } = require('../utils/financialYear');
 
 // ─── Load company logo as Base64 (embedded in PDF) ───────────────────────────
 const getLogoBase64 = () => {
@@ -27,7 +28,7 @@ const getLogoBase64 = () => {
 const generateSaleNumber = async () => {
   const settingsList = await db.select()
     .from(schema.settings)
-    .where(inArray(schema.settings.key, ['INV_PREFIX', 'INV_DATE_FORMAT', 'INV_CUSTOM_YEAR']));
+    .where(inArray(schema.settings.key, ['INV_PREFIX', 'INV_DATE_FORMAT', 'INV_CUSTOM_YEAR', 'INV_COUNTER_OFFSET']));
   const getSetting = (k, def) => settingsList.find(s => s.key === k)?.value || def;
 
   const prefix = getSetting('INV_PREFIX', 'INV');
@@ -50,6 +51,19 @@ const generateSaleNumber = async () => {
   else if (format === 'YYYYMM') dateStr = `${year}${String(month).padStart(2, '0')}`;
   else if (format === 'CUSTOM') dateStr = customYearStr;
 
+  // Period-scoped offset: only apply if the stored period matches the current period.
+  // This ensures the offset automatically expires when FY/year/month rolls over.
+  const currentPeriod = dateStr || 'ALL';
+  let counterOffset = 0;
+  try {
+    const raw = getSetting('INV_COUNTER_OFFSET', null);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.period === currentPeriod) counterOffset = parseInt(parsed.offset) || 0;
+      // else: period mismatch → offset expired → treat as 0 (new period starts at 1)
+    }
+  } catch { counterOffset = 0; }
+
   const conditions = [];
   if (format === 'FY_YY_YY') {
     conditions.push(gte(schema.sales.createdAt, fyStartDate), lt(schema.sales.createdAt, fyEndDate));
@@ -66,8 +80,31 @@ const generateSaleNumber = async () => {
     .where(conditions.length > 0 ? and(...conditions) : undefined);
   const count = Number(countResult[0]?.count || 0);
   
+  // counterOffset shifts the sequence within the current period only
+  let nextSeq = count + counterOffset + 1;
   const middlePart = dateStr ? `/${dateStr}` : '';
-  return `${prefix}${middlePart}/${String(count + 1).padStart(3, '0')}`;
+  let candidateNumber = `${prefix}${middlePart}/${String(nextSeq).padStart(3, '0')}`;
+
+  // ── Collision Guard ────────────────────────────────────────────────────────
+  // If the admin manually set the invoice counter back to a low number,
+  // we check if the candidate already exists in the database.
+  // If it does, we automatically fast-forward until we hit a unique, unused number.
+  const MAX_RETRIES = 500;
+  let retries = 0;
+  while (retries < MAX_RETRIES) {
+    const [existingSale] = await db.select({ id: schema.sales.id })
+      .from(schema.sales)
+      .where(eq(schema.sales.saleNumber, candidateNumber))
+      .limit(1);
+
+    if (!existingSale) break; // Unique number found! ✓
+
+    nextSeq += 1;
+    candidateNumber = `${prefix}${middlePart}/${String(nextSeq).padStart(3, '0')}`;
+    retries++;
+  }
+
+  return candidateNumber;
 };
 
 const generateReceiptNumber = async () => {
@@ -504,8 +541,9 @@ const buildReceiptHTML = (payment, sale) => `
 exports.getSales = async (req, res) => {
   try {
     const { status, paymentStatus, customerId, search, page = 1, limit = 100 } = req.query;
+    const fy = req.query.fy || getFinancialYear();
 
-    const conditions = [];
+    const conditions = [eq(schema.sales.financialYear, fy)];
 
     if (req.user.role === 'EMPLOYEE') {
       conditions.push(eq(schema.sales.createdById, req.user.id));
@@ -824,6 +862,7 @@ exports.createSale = async (req, res) => {
       totalAmount: String(totalAmount),
       balanceAmount: String(totalAmount),
       notes: fullNotes || null,
+      financialYear: getFinancialYear(),
       createdAt: now,
       updatedAt: now
     };

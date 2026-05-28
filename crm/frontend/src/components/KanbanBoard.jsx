@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLeadStore } from '../stores/leadStore';
 import { format } from 'date-fns';
+import useFYStore from '../stores/fyStore';
 
 const LEAD_STATUSES = [
   { id: 'NEW', label: 'New', color: 'bg-gray-500' },
@@ -15,10 +16,11 @@ const LEAD_STATUSES = [
 const KanbanBoard = ({ onLeadClick, onCreateLead }) => {
   const { leads, isLoading, fetchLeads, updateLead } = useLeadStore();
   const [draggedLead, setDraggedLead] = useState(null);
+  const selectedFY = useFYStore(state => state.selectedFY);
 
   useEffect(() => {
     fetchLeads();
-  }, [fetchLeads]);
+  }, [fetchLeads, selectedFY]);
 
   const handleDragStart = (lead) => {
     setDraggedLead(lead);

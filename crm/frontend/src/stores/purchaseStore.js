@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '../services/api';
+import useFYStore from './fyStore';
 
 export const usePurchaseStore = create((set, get) => ({
   vendors: [],
@@ -70,7 +71,8 @@ export const usePurchaseStore = create((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const { poPagination } = get();
-      const query = new URLSearchParams({ page: poPagination.page, limit: poPagination.limit, ...params });
+      const fy = useFYStore.getState().selectedFY;
+      const query = new URLSearchParams({ page: poPagination.page, limit: poPagination.limit, fy, ...params });
       const res = await api.get(`/purchase?${query}`);
       set({ purchaseOrders: res.data.data, poPagination: res.data.pagination, isLoading: false });
     } catch (err) {

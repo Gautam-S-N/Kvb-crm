@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '../services/api';
+import useFYStore from './fyStore';
 
 export const useTaskStore = create((set, get) => ({
   tasks: [],
@@ -11,7 +12,8 @@ export const useTaskStore = create((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const { pagination } = get();
-      const query = new URLSearchParams({ page: pagination.page, limit: pagination.limit, ...params });
+      const fy = useFYStore.getState().selectedFY;
+      const query = new URLSearchParams({ page: pagination.page, limit: pagination.limit, fy, ...params });
       const res = await api.get(`/tasks?${query}`);
       set({ tasks: res.data.data, pagination: res.data.pagination, isLoading: false });
     } catch (err) {

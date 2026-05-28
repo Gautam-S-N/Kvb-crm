@@ -41,7 +41,8 @@ exports.register = async (req, res) => {
       canAssignLeads: false,
       canAssignTasks: false,
       canViewSubordinates: false,
-      canCreateMaterialRequests: false
+      canCreateMaterialRequests: false,
+      canCreateProjectPlans: false
     };
 
     await db.insert(schema.users).values(newUser);
@@ -94,14 +95,15 @@ exports.login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    // Update last login
+    // Update last login and session ID
+    const currentSessionId = randomUUID();
     await db.update(schema.users)
-      .set({ lastLoginAt: new Date() })
+      .set({ lastLoginAt: new Date(), currentSessionId })
       .where(eq(schema.users.id, user.id));
 
     // Generate JWT
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
+      { id: user.id, email: user.email, role: user.role, sessionId: currentSessionId },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
     );
@@ -109,6 +111,7 @@ exports.login = async (req, res) => {
     // Return user data (without password)
     const { password: _, ...userData } = user;
     userData.lastLoginAt = new Date(); // Reflecting immediate update
+    userData.currentSessionId = currentSessionId;
 
     res.json({
       success: true,
@@ -144,7 +147,9 @@ exports.me = async (req, res) => {
       canAssignLeads: schema.users.canAssignLeads,
       canAssignTasks: schema.users.canAssignTasks,
       canViewSubordinates: schema.users.canViewSubordinates,
-      canCreateMaterialRequests: schema.users.canCreateMaterialRequests
+      canCreateMaterialRequests: schema.users.canCreateMaterialRequests,
+      canCreateProjectPlans: schema.users.canCreateProjectPlans,
+      currentSessionId: schema.users.currentSessionId
     })
     .from(schema.users)
     .where(eq(schema.users.id, req.user.id))

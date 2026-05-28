@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import { useMaterialStore } from '../stores/materialStore';
+import MaterialHistoryDrawer from '../components/MaterialHistoryDrawer';
 import api from '../services/api';
 import {
   Plus, Search, Edit2, Trash2, AlertTriangle, Package, X,
-  Tag, Info, CheckCircle2, ChevronDown, Save
+  Tag, Info, CheckCircle2, ChevronDown, Save, History
 } from 'lucide-react';
 
 const DC_RAW_CATS = ['Sq. Tube', 'Flat Plate', 'Rec. Tube', 'Hardware', 'Round Tube', 'Round Rod', 'L Angle', 'C Channel'];
@@ -23,6 +24,7 @@ export default function DCRawMaterials() {
   const [editing, setEditing]       = useState(null);
   const [form, setForm]             = useState(BLANK);
   const [submitError, setSubmitError] = useState('');
+  const [activeHistoryMaterial, setActiveHistoryMaterial] = useState(null);
   const [stockLookup, setStockLookup] = useState(null);
   const [lookingUp, setLookingUp]   = useState(false);
   const timer = useRef(null);
@@ -210,6 +212,7 @@ export default function DCRawMaterials() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-1">
+                      <button onClick={() => setActiveHistoryMaterial(m)} className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-md" title="Usage History"><History size={14}/></button>
                       <button onClick={() => openEdit(m)} className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md" title="Edit"><Edit2 size={14}/></button>
                       <button onClick={() => handleDelete(m.id)} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md" title="Delete"><Trash2 size={14}/></button>
                     </div>
@@ -339,6 +342,13 @@ export default function DCRawMaterials() {
             </form>
           </div>
         </div>
+      )}
+
+      {activeHistoryMaterial && (
+        <MaterialHistoryDrawer 
+          material={activeHistoryMaterial} 
+          onClose={() => setActiveHistoryMaterial(null)} 
+        />
       )}
     </Layout>
   );

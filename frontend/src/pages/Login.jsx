@@ -1,17 +1,26 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [searchParams] = useSearchParams();
+  const [notification, setNotification] = useState('');
   const navigate = useNavigate();
   
   const { login, isLoading, error, clearError } = useAuthStore();
 
+  useEffect(() => {
+    if (searchParams.get('reason') === 'session_expired') {
+      setNotification('Your session has been terminated because your account was logged in on another device.');
+    }
+  }, [searchParams]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     clearError();
+    setNotification('');
     
     const result = await login(email, password);
     if (result.success) {
@@ -32,6 +41,11 @@ const Login = () => {
         </div>
         
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+          {notification && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded text-sm font-medium">
+              {notification}
+            </div>
+          )}
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
               {error}

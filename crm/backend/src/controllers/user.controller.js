@@ -24,7 +24,7 @@ exports.getUnassignedCount = async (req, res) => {
 
 exports.getUsers = async (req, res) => {
   try {
-    const { role, search } = req.query;
+    const { role, search, limit } = req.query;
     
     const conditions = [ne(schema.users.status, 'INACTIVE')];
     if (role) {
@@ -41,7 +41,7 @@ exports.getUsers = async (req, res) => {
       );
     }
 
-    const users = await db.select({
+    let query = db.select({
       id: schema.users.id,
       email: schema.users.email,
       firstName: schema.users.firstName,
@@ -60,12 +60,18 @@ exports.getUsers = async (req, res) => {
       canAssignLeads: schema.users.canAssignLeads,
       canAssignTasks: schema.users.canAssignTasks,
       canViewSubordinates: schema.users.canViewSubordinates,
-      canCreateMaterialRequests: schema.users.canCreateMaterialRequests
+      canCreateMaterialRequests: schema.users.canCreateMaterialRequests,
+      canCreateProjectPlans: schema.users.canCreateProjectPlans,
     })
     .from(schema.users)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(schema.users.firstName);
 
+    if (limit) {
+      query = query.limit(parseInt(limit));
+    }
+
+    const users = await query;
     res.json({ success: true, data: users });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -301,6 +307,7 @@ exports.updateUser = async (req, res) => {
         data.canAssignTasks               = Boolean(permissions.canAssignTasks);
         data.canViewSubordinates          = Boolean(permissions.canViewSubordinates);
         data.canCreateMaterialRequests    = Boolean(permissions.canCreateMaterialRequests);
+        data.canCreateProjectPlans        = Boolean(permissions.canCreateProjectPlans);
       }
 
       if (delegatedManagerId !== undefined) data.delegatedManagerId = delegatedManagerId;

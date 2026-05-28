@@ -7,6 +7,7 @@ const fs = require('fs');
 const ExcelJS = require('exceljs');
 const { incrementAndGet, syncCounterToMax } = require('../services/counter.service');
 const { randomUUID } = require('crypto');
+const { getFinancialYear } = require('../utils/financialYear');
 
 // Pre-load logo as base64 once at startup
 const LOGO_PATH = path.join(__dirname, '../assets/logo.jpg');
@@ -273,7 +274,8 @@ const generateDOCXBuffer = async (po) => {
 exports.getPurchaseOrders = async (req, res) => {
   try {
     const { status, vendorId, search, page = 1, limit = 100 } = req.query;
-    const conditions = [];
+    const fy = req.query.fy || getFinancialYear();
+    const conditions = [eq(schema.purchaseOrders.financialYear, fy)];
     if (status) conditions.push(eq(schema.purchaseOrders.status, status));
     if (vendorId) conditions.push(eq(schema.purchaseOrders.vendorId, vendorId));
     if (search) {
@@ -502,6 +504,7 @@ exports.createPurchaseOrder = async (req, res) => {
       totalAmount: String(totalAmount),
       expectedDate: expectedDate ? new Date(expectedDate) : null,
       notes,
+      financialYear: getFinancialYear(),
       createdAt: now,
       updatedAt: now
     };
@@ -514,6 +517,20 @@ exports.createPurchaseOrder = async (req, res) => {
         purchaseOrderId: newPoId
       }));
       await tx.insert(schema.purchaseOrderItems).values(itemsWithPoId);
+
+      // Link back to project plan items if specified in req.body.items
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          if (item.projectPlanItemId) {
+            await tx.update(schema.projectPlanItems)
+              .set({
+                purchaseOrderId: newPoId,
+                fulfillmentType: 'PURCHASE_ORDER'
+              })
+              .where(eq(schema.projectPlanItems.id, item.projectPlanItemId));
+          }
+        }
+      }
 
       return {
         ...poData,

@@ -10,13 +10,15 @@ import AuditLogsTab from '../components/AuditLogsTab';
 
 export default function Settings() {
   const { user } = useAuthStore();
-  const { settings, fetchSettings, updateSetting } = useSettingStore();
+  const { settings, fetchSettings, updateSetting, invoiceCounter, fetchInvoiceCounter, setInvoiceCounter } = useSettingStore();
   const { updateUser } = useUserStore();
   const { counters, fetchCounters, updateCounter } = useQuotationStore();
 
   const [activeTab, setActiveTab] = useState('profile');
   const [counterEdits, setCounterEdits] = useState({});
   const [counterSaving, setCounterSaving] = useState(null);
+  const [invCounterEdit, setInvCounterEdit] = useState('');
+  const [invCounterSaving, setInvCounterSaving] = useState(false);
 
   
   // Profile state
@@ -56,6 +58,7 @@ export default function Settings() {
       fetchSettings();
     }
     if (user?.role === 'ADMIN' && activeTab === 'quotation') fetchCounters();
+    if (user?.role === 'ADMIN' && activeTab === 'invoice') fetchInvoiceCounter();
   }, [user, activeTab]);
 
 
@@ -122,9 +125,30 @@ export default function Settings() {
     const res = await updateCounter(productCode, val);
     setCounterSaving(null);
     if (res.success) {
-      alert(`Counter for ${productCode} updated to ${val}.`);
+      if (res.warning) {
+        alert(`✅ Counter saved with adjustment:\n\n${res.warning}`);
+      } else {
+        alert(`Counter for ${productCode} updated. Next quotation: ${res.nextPreview || ''}`);
+      }
+      // Refresh to show effective value
+      fetchCounters();
+      setCounterEdits(prev => ({ ...prev, [productCode]: undefined }));
     } else {
       alert(res.error || 'Failed to update counter');
+    }
+  };
+  const handleInvoiceCounterSave = async () => {
+    const val = parseInt(invCounterEdit);
+    if (isNaN(val) || val < 1) return alert('Please enter a valid positive integer (the desired next invoice number).');
+    setInvCounterSaving(true);
+    const res = await setInvoiceCounter(val);
+    setInvCounterSaving(false);
+    if (res.success) {
+      alert(`✅ ${res.message || `Next invoice will start at #${val}`}`);
+      fetchInvoiceCounter(); // refresh live preview
+      setInvCounterEdit('');
+    } else {
+      alert(res.error || 'Failed to update invoice counter');
     }
   };
 
@@ -420,8 +444,90 @@ export default function Settings() {
 
                 <button type="submit" className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm rounded-lg transition-colors shadow">Save Formats</button>
               </form>
+
+              {/* ── Invoice Counter Reset ─────────────────────────────────── */}
+              <div className="mt-8 border-t border-gray-100 pt-6">
+                <h3 className="text-md font-bold text-gray-800 mb-1">Sequential Counter</h3>
+                <p className="text-sm text-gray-500 mb-5">
+                  Control which number the <strong>next invoice</strong> will receive. The counter <strong>automatically resets to #1 at the start of each new Financial Year</strong> — you only need to set this if you want to start from a specific number mid-year.
+                </p>
+
+                <div className="border border-blue-100 bg-blue-50/30 rounded-xl p-5">
+                  {/* Period badge */}
+                  {invoiceCounter && (
+                    <div className="flex items-center gap-2 mb-4">
+                      <span className="text-xs font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                        Period: {invoiceCounter.currentPeriod || 'All'}
+                      </span>
+                      {invoiceCounter.offsetActive ? (
+                        <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                          ⚙️ Custom offset active (+{invoiceCounter.counterOffset})
+                        </span>
+                      ) : (
+                        <span className="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
+                          ✅ Auto (no custom offset)
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Stats row */}
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-0.5">Invoices this period</p>
+                      <p className="text-3xl font-mono font-bold text-gray-800">
+                        {invoiceCounter ? String(invoiceCounter.currentCount).padStart(3, '0') : '—'}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-0.5">Next invoice will be</p>
+                      <p className="text-xl font-mono font-bold text-blue-700 bg-blue-100 px-3 py-1 rounded-lg">
+                        {invoiceCounter?.nextNumber || '…'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-gray-500 mb-3">
+                    Set the number you want the <strong>next</strong> invoice to use:
+                  </p>
+
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={invCounterEdit}
+                      onChange={e => setInvCounterEdit(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      placeholder={`e.g. ${(invoiceCounter?.currentCount || 0) + 1}`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setInvCounterEdit('1')}
+                      className="px-3 py-2 text-xs font-semibold bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors border border-gray-200"
+                      title="Start from 1"
+                    >
+                      Start at 1
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleInvoiceCounterSave}
+                      disabled={invCounterSaving || !invCounterEdit}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {invCounterSaving ? 'Saving…' : 'Set Counter'}
+                    </button>
+                  </div>
+
+                  <div className="mt-3 p-2.5 bg-blue-50 border border-blue-100 rounded-lg">
+                    <p className="text-[11px] text-blue-700 leading-relaxed">
+                      💡 <strong>FY Transition:</strong> You do <strong>not</strong> need to reset at year-end. When a new Financial Year starts, the system automatically counts from 0 in the new FY and any custom offset from the old FY is ignored. The next invoice will be <code className="font-mono bg-blue-100 px-1 rounded">INV/26-27/001</code> automatically.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
+
 
 
           {activeTab === 'audit' && user?.role === 'ADMIN' && (

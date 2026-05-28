@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useSaleStore } from '../stores/saleStore';
 import { useAuthStore } from '../stores/authStore';
+import useFYStore from '../stores/fyStore';
 import {
   Plus, Search, Filter, Eye, Download, IndianRupee,
   RefreshCw, ShoppingCart, CheckCircle, Clock, AlertCircle, FileSpreadsheet,
@@ -47,10 +48,12 @@ export default function Sales() {
     setExpandedProducts(prev => ({ ...prev, [idx]: !prev[idx] }));
   };
 
+  const selectedFY = useFYStore(state => state.selectedFY);
+
   useEffect(() => {
     fetchSales();
     fetchProductSummary();
-  }, []);
+  }, [selectedFY]);
 
   const handleSearch = (e) => {
     e.preventDefault();

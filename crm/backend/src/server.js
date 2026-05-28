@@ -39,6 +39,10 @@ const notificationRoutes = require('./routes/notification.routes');
 const materialRoutes = require('./routes/material.routes');
 const materialRequestRoutes = require('./routes/materialRequest.routes');
 const materialCatalogRoutes = require('./routes/materialCatalog.routes');
+const projectPlanRoutes    = require('./routes/projectPlan.routes');
+const collectionTaskRoutes = require('./routes/collectionTask.routes');
+const materialHistoryCtrl  = require('./controllers/materialUsageHistory.controller');
+const { authMiddleware }   = require('./middleware/auth.middleware');
 
 
 
@@ -107,7 +111,26 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/material-catalog', materialCatalogRoutes);
-app.use('/api/material-requests', materialRequestRoutes);
+
+// Legacy material-requests — kept for backward compat, deprecation notice in header
+app.use('/api/material-requests', (req, res, next) => {
+  res.setHeader('X-Deprecation-Notice', 'This endpoint is deprecated. Use /api/project-plans instead.');
+  next();
+}, materialRequestRoutes);
+
+// Project Planning Module (new)
+app.use('/api/project-plans', projectPlanRoutes);
+app.use('/api/collection-tasks', collectionTaskRoutes);
+
+// Material usage history is nested under /api/materials/:id/history
+// (handled by projectPlan routes for /api/project-plans/:id/history)
+app.use('/api/materials', authMiddleware, (req, res, next) => {
+  // Only handle /api/materials/:id/history here — all other /api/materials routes handled by materialRoutes above
+  if (req.path.match(/^\/[^/]+\/history/)) {
+    return materialHistoryCtrl.getByMaterial(req, res, next);
+  }
+  next();
+});
 
 
 app.use('/api/quotations', quotationRoutes);

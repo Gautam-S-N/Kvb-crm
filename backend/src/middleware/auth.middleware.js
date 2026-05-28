@@ -20,7 +20,8 @@ const authMiddleware = async (req, res, next) => {
       firstName: schema.users.firstName,
       lastName: schema.users.lastName,
       role: schema.users.role,
-      status: schema.users.status
+      status: schema.users.status,
+      currentSessionId: schema.users.currentSessionId
     })
     .from(schema.users)
     .where(eq(schema.users.id, decoded.id))
@@ -34,6 +35,15 @@ const authMiddleware = async (req, res, next) => {
 
     if (user.status !== 'ACTIVE') {
       return res.status(401).json({ success: false, message: 'Account is suspended. Please contact your administrator.' });
+    }
+
+    // Single active session check (with grace period guard)
+    if (user.currentSessionId && decoded.sessionId !== user.currentSessionId) {
+      return res.status(401).json({
+        success: false,
+        sessionExpired: true,
+        message: 'Your account has been logged in on another device. This session is now terminated.'
+      });
     }
 
     req.user = user;

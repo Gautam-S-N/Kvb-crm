@@ -5,13 +5,15 @@ const { incrementAndGet, syncCounterToMax } = require('../services/counter.servi
 const { getSubordinateIds } = require('../middleware/permission.middleware');
 const { triggerRefreshForEmployee } = require('../services/achievement.service');
 const { randomUUID } = require('crypto');
+const { getFinancialYear } = require('../utils/financialYear');
 
 // Get all leads with filters
 exports.getLeads = async (req, res) => {
   try {
     const { status, source, assignedTo, search, page = 1, limit = 100 } = req.query;
+    const fy = req.query.fy || getFinancialYear();
     
-    const conditions = [eq(schema.leads.isArchived, false)];
+    const conditions = [eq(schema.leads.isArchived, false), eq(schema.leads.financialYear, fy)];
     
     // Role-based filtering
     if (req.user.role === 'EMPLOYEE') {
@@ -519,6 +521,7 @@ exports.createLead = async (req, res) => {
       createdById: req.user.id,
       assignedToId: req.user.role === 'ADMIN' ? (assignedToId || req.user.id) : finalAssignedToId,
       isArchived: false,
+      financialYear: getFinancialYear(),
       createdAt: new Date(),
       updatedAt: new Date()
     };

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { usePurchaseStore } from '../stores/purchaseStore';
 import { Plus, Search, Filter, FileText, FileSpreadsheet, File, Truck, ShoppingBag, Edit } from 'lucide-react';
+import useFYStore from '../stores/fyStore';
 
 const STATUS_COLORS = {
   PENDING:   'bg-yellow-100 text-yellow-800',
@@ -24,9 +25,11 @@ export default function PurchaseOrders() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
 
+  const selectedFY = useFYStore(state => state.selectedFY);
+
   useEffect(() => {
     fetchPurchaseOrders();
-  }, []);
+  }, [selectedFY]);
 
   const handleSearch = (e) => {
     e.preventDefault();

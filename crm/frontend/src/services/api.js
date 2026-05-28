@@ -30,13 +30,20 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      const isSessionExpired = error.response.data?.sessionExpired;
+      
       // Clear ALL auth keys to prevent stale state
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       localStorage.removeItem('auth-storage');
+      
       // Only redirect if not already on login page
       if (!window.location.pathname.includes('/login')) {
-        window.location.href = '/login';
+        if (isSessionExpired) {
+          window.location.href = '/login?reason=session_expired';
+        } else {
+          window.location.href = '/login';
+        }
       }
     }
     return Promise.reject(error);
